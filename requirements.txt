@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+apscheduler
+openpyxl
+python-multipart
+keyring
+winotify
+pydantic
+httpx
+pytest
