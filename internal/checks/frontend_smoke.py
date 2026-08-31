@@ -5,7 +5,7 @@ def main():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True, executable_path=r"C:\Program Files\Google\Chrome\Application\chrome.exe")
         page = browser.new_page(viewport={"width": 1440, "height": 900})
-        page.goto("http://127.0.0.1:8788", wait_until="networkidle")
+        page.goto("http://127.0.0.1:8791", wait_until="networkidle")
         page.get_by_role("heading", name="订单提醒工作台").wait_for()
         page.locator("#import-file").set_input_files(r"C:\Users\Administrator.DESKTOP-OV0JDHK\Desktop\work\order-1787727280.xlsx")
         page.locator("#order-table-body tr").first.wait_for(timeout=30000)

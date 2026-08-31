@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Callable
 
+from .config import APP_HOST, APP_PORT
 from .date_rules import LOCAL_TZ, build_reminder_schedule
 
 
@@ -82,7 +83,7 @@ class ReminderService:
 
         channel_statuses: dict[int, dict[str, str]] = {event_id: {} for event_id, _, _ in claimed}
         title = f"Order reminder: {event_type}"
-        url = "http://127.0.0.1:8788/"
+        url = f"http://{APP_HOST}:{APP_PORT}/"
         for channel, enabled in (("windows", settings.get("windows_notifications_enabled")), ("email", settings.get("email_enabled"))):
             needed = [(event_id, order, event) for event_id, order, event in claimed if not _was_sent(event, channel)]
             if not enabled:
