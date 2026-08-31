@@ -12,7 +12,7 @@
    ..\.venv\Scripts\python.exe -m pip install -r requirements.txt
    ```
 
-3. 双击 `launch_order_reminder.vbs`，它会隐藏启动服务并自动打开浏览器；需要查看运行日志时双击 `start_app.bat`，或运行 `..\.venv\Scripts\python.exe run_app.py`。
+3. 双击 `launch_order_reminder.vbs`，它会隐藏启动正式服务、开启自动提醒并打开浏览器；需要查看运行日志时双击 `start_app.bat`，或运行 `..\.venv\Scripts\python.exe run_app.py`。
 4. 浏览器打开 http://127.0.0.1:8791 。
 
 数据文件位于 `data\orders.sqlite3`。导入 ERP 文件时选择包含 `Export orders` 工作表的 `.xlsx` 文件；重复导入会按 `refrence_no` 合并，不覆盖手工补录的到货时间、处理阶段、手动截止、实际物流号、回传确认和处理备注。
