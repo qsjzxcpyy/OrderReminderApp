@@ -175,6 +175,15 @@ def test_order_detail_includes_reminder_events_and_channel_status(tmp_path):
     assert detail["reminders"][0]["email_status"] == "FAILED"
 
 
+def test_production_notification_test_returns_channel_result(tmp_path):
+    client = TestClient(create_app(db_path=tmp_path / "orders.sqlite3", start_scheduler=True))
+    client.app.state.windows_notifier.send = lambda *args, **kwargs: {"status": "SENT", "message": "test notification sent"}
+
+    response = client.post("/api/settings/test-notification")
+
+    assert response.json() == {"status": "SENT", "message": "test notification sent"}
+
+
 def test_error_request_closes_database_connection_for_windows_cleanup(tmp_path):
     database_path = tmp_path / "cleanup.sqlite3"
     client = TestClient(create_app(db_path=database_path, start_scheduler=False))

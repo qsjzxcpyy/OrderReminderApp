@@ -216,7 +216,7 @@ def create_app(db_path=None, start_scheduler=False):
     def test_notification():
         if not start_scheduler:
             return {"status": "UNSUPPORTED", "message": "Notification delivery is disabled in deterministic test mode."}
-            return app.state.windows_notifier.send("Order reminder test", "Windows notifications are configured.", f"http://{APP_HOST}:{APP_PORT}/")
+        return app.state.windows_notifier.send("Order reminder test", "Windows notifications are configured.", f"http://{APP_HOST}:{APP_PORT}/")
 
     @app.post("/api/reminders/check")
     def check_reminders():
