@@ -31,6 +31,15 @@ class WindowsNotifier:
 
 
 class SmtpMailer:
+    @staticmethod
+    def _login(client, host: str, username: str, secret: str) -> None:
+        if host.lower() == "smtp.qq.com":
+            client.user = username
+            client.password = secret
+            client.auth("LOGIN", client.auth_login, initial_response_ok=False)
+            return
+        client.login(username, secret)
+
     def send_digest(self, event_type: str, orders: list[dict[str, Any]], settings: dict[str, Any], secret: str | None) -> dict[str, Any]:
         try:
             raw_recipients = settings.get("recipients", [])
@@ -54,14 +63,14 @@ class SmtpMailer:
         try:
             if port == 465:
                 with smtplib.SMTP_SSL(host, port, timeout=15) as client:
-                    client.login(username, secret)
+                    self._login(client, host, username, secret)
                     client.send_message(message)
             else:
                 with smtplib.SMTP(host, port, timeout=15) as client:
                     client.ehlo()
                     client.starttls()
                     client.ehlo()
-                    client.login(username, secret)
+                    self._login(client, host, username, secret)
                     client.send_message(message)
             return _result("SENT", "Email digest sent", recipients=len(recipients))
         except Exception as error:

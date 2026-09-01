@@ -272,6 +272,41 @@ def test_smtp_malformed_port_returns_not_configured_instead_of_raising():
     assert result["status"] == "NOT_CONFIGURED"
 
 
+def test_qq_smtp_uses_login_authentication(monkeypatch):
+    from app import notifications
+
+    class FakeSmtp:
+        def __init__(self, *_args, **_kwargs):
+            self.auth_calls = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def auth_login(self, challenge=None):
+            return "encoded-login"
+
+        def auth(self, mechanism, authobject, **kwargs):
+            self.auth_calls.append((mechanism, authobject, kwargs))
+            return 235, b"ok"
+
+        def send_message(self, _message):
+            return None
+
+    smtp = FakeSmtp()
+    monkeypatch.setattr(notifications.smtplib, "SMTP_SSL", lambda *_args, **_kwargs: smtp)
+
+    result = SmtpMailer().send_digest("TEST", [], {
+        "smtp_host": "smtp.qq.com", "smtp_port": 465, "smtp_username": "ops@qq.com", "recipients": ["owner@qq.com"],
+    }, "secret")
+
+    assert result["status"] == "SENT"
+    assert smtp.auth_calls[0][0] == "LOGIN"
+    assert smtp.auth_calls[0][2] == {"initial_response_ok": False}
+
+
 def test_manual_reminder_check_route(tmp_path):
     client = TestClient(create_app(db_path=tmp_path / "orders.sqlite3", start_scheduler=False))
     response = client.post("/api/reminders/check")
