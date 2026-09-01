@@ -105,6 +105,15 @@ def test_settings_never_returns_secret_and_reports_unconfigured_adapters(tmp_pat
     assert client.post("/api/settings/test-notification").json()["status"] == "UNSUPPORTED"
 
 
+def test_settings_default_to_qq_smtp(tmp_path):
+    client = make_client(tmp_path)
+
+    settings = client.get("/api/settings").json()
+
+    assert settings["smtp_host"] == "smtp.qq.com"
+    assert settings["smtp_port"] == 465
+
+
 def test_invalid_upload_and_missing_order_are_rejected(tmp_path):
     client = make_client(tmp_path)
     assert client.post("/api/import", files={"file": ("orders.csv", b"bad", "text/csv")}).status_code == 422

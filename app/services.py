@@ -203,7 +203,7 @@ class OrderService:
 
     def get_settings(self) -> dict:
         stored = self.repository.get_settings()
-        result = {"compensation_days": 2, "windows_notifications_enabled": True, "email_enabled": False, "smtp_host": "", "smtp_port": 587, "smtp_username": "", "recipients": [], "processing_results": [], **stored}
+        result = {"compensation_days": 2, "windows_notifications_enabled": True, "email_enabled": False, "smtp_host": "smtp.qq.com", "smtp_port": 465, "smtp_username": "", "recipients": [], "processing_results": [], **stored}
         result["smtp_secret_configured"] = self.secrets.exists("smtp_authorization_code")
         return result
 
