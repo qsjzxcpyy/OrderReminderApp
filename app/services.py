@@ -210,7 +210,8 @@ class OrderService:
     def update_settings(self, patch: dict) -> dict:
         secret = patch.pop("smtp_authorization_code", None)
         if secret is not None:
-            self.secrets.set("smtp_authorization_code", secret)
+            if not self.secrets.set("smtp_authorization_code", secret):
+                raise ValueError("授权码保存失败，请检查 Windows 凭据存储权限")
         self.repository.save_settings(patch)
         self.repository.append_activity(None, "SETTINGS_UPDATED", {"keys": sorted(patch)})
         return self.get_settings()

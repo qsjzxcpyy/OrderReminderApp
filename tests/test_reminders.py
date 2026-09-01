@@ -242,14 +242,27 @@ def test_credential_store_uses_named_entries_without_cross_leakage(monkeypatch):
     assert credential_store.get_secret("other") == "two"
 
 
-def test_credential_store_is_not_configured_when_keyring_save_or_get_fails(monkeypatch):
+def test_credential_store_falls_back_to_dpapi_when_keyring_save_or_get_fails(monkeypatch, tmp_path):
     from app import credential_store
 
-    store = credential_store.CredentialStore()
+    store = credential_store.CredentialStore(secret_path=tmp_path / "smtp_secret.dpapi")
     monkeypatch.setattr(credential_store.keyring, "set_password", lambda *_args: (_ for _ in ()).throw(RuntimeError("unavailable")))
     monkeypatch.setattr(credential_store.keyring, "get_password", lambda *_args: (_ for _ in ()).throw(RuntimeError("unavailable")))
-    store.set("smtp", "secret")
-    assert store.exists("smtp") is False
+    assert store.set("smtp", "secret") is True
+    assert store.exists("smtp") is True
+    assert store.get("smtp") == "secret"
+    assert store.secret_path.read_bytes() != b"secret"
+    store.delete("smtp")
+
+
+def test_credential_store_reports_failure_when_keyring_and_dpapi_fail(monkeypatch, tmp_path):
+    from app import credential_store
+
+    store = credential_store.CredentialStore(secret_path=tmp_path / "smtp_secret.dpapi")
+    monkeypatch.setattr(credential_store.keyring, "set_password", lambda *_args: (_ for _ in ()).throw(RuntimeError("unavailable")))
+    monkeypatch.setattr(credential_store, "protect_secret", lambda *_args: (_ for _ in ()).throw(RuntimeError("dpapi unavailable")))
+
+    assert store.set("smtp", "secret") is False
 
 
 def test_smtp_malformed_port_returns_not_configured_instead_of_raising():

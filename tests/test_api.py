@@ -34,6 +34,12 @@ def make_client(tmp_path):
     return TestClient(create_app(db_path=tmp_path / "test.sqlite3", start_scheduler=False))
 
 
+def test_test_app_uses_database_directory_for_credential_fallback(tmp_path):
+    client = make_client(tmp_path)
+
+    assert client.app.state.secrets.secret_path == tmp_path / "smtp_secret.dpapi"
+
+
 def import_order(client, workbook):
     with workbook.open("rb") as source:
         return client.post("/api/import", files={"file": ("orders.xlsx", source, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
@@ -92,16 +98,15 @@ def test_manual_deadline_and_exception_completion_validation(tmp_path):
     assert done.json()["order"]["completed_at"] is not None
 
 
-def test_settings_never_returns_secret_and_reports_unconfigured_adapters(tmp_path):
+def test_settings_never_returns_secret_and_reports_configured_fallback(tmp_path):
     client = make_client(tmp_path)
     response = client.patch("/api/settings", json={"compensation_days": 3, "email_enabled": True, "smtp_host": "smtp.example.com", "smtp_port": 465, "smtp_username": "ops@example.com", "smtp_authorization_code": "never-expose-this", "recipients": ["owner@example.com"], "processing_results": ["cancelled"]})
     assert response.status_code == 200
     settings = client.get("/api/settings").json()
     assert "smtp_authorization_code" not in settings
-    # This environment has no usable OS credential backend. A failed keyring
-    # write must not be reported as configured.
-    assert settings["smtp_secret_configured"] is False
-    assert client.post("/api/settings/test-email").json()["status"] == "NOT_CONFIGURED"
+    # The keyring may be unavailable, but the DPAPI fallback still configures
+    # the adapter without exposing the secret.
+    assert settings["smtp_secret_configured"] is True
     assert client.post("/api/settings/test-notification").json()["status"] == "UNSUPPORTED"
 
 
@@ -112,6 +117,16 @@ def test_settings_default_to_qq_smtp(tmp_path):
 
     assert settings["smtp_host"] == "smtp.qq.com"
     assert settings["smtp_port"] == 465
+
+
+def test_settings_reports_credential_save_failure(tmp_path, monkeypatch):
+    client = make_client(tmp_path)
+    monkeypatch.setattr(client.app.state.secrets, "set", lambda *_args: False)
+
+    response = client.patch("/api/settings", json={"smtp_authorization_code": "secret"})
+
+    assert response.status_code == 422
+    assert "授权码" in response.json()["detail"]
 
 
 def test_invalid_upload_and_missing_order_are_rejected(tmp_path):

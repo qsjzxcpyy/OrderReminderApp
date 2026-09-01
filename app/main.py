@@ -79,7 +79,7 @@ def create_app(db_path=None, start_scheduler=False):
     initialize_database(path)
     app = FastAPI(title="Order Reminder", version=APP_VERSION)
     app.state.db_path = path
-    app.state.secrets = CredentialStore()
+    app.state.secrets = CredentialStore(secret_path=path.parent / "smtp_secret.dpapi")
     app.state.max_upload_bytes = 50 * 1024 * 1024
     app.state.windows_notifier = WindowsNotifier()
     app.state.smtp_mailer = SmtpMailer()
@@ -201,8 +201,11 @@ def create_app(db_path=None, start_scheduler=False):
 
     @app.patch("/api/settings")
     def patch_settings(request: SettingsPatch):
-        with service() as orders:
-            return orders.update_settings(request.model_dump(exclude_unset=True))
+        try:
+            with service() as orders:
+                return orders.update_settings(request.model_dump(exclude_unset=True))
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
 
     @app.post("/api/settings/test-email")
     def test_email():
