@@ -1,6 +1,8 @@
 import sqlite3
 from pathlib import Path
 
+from .workflow import LEGACY_STAGE_MAP
+
 
 def connect_database(db_path):
     connection = sqlite3.connect(str(db_path), isolation_level="DEFERRED")
@@ -98,5 +100,7 @@ def initialize_database(db_path):
     columns = {row[1] for row in connection.execute("PRAGMA table_info(orders)")}
     if "overdue_at" not in columns:
         connection.execute("ALTER TABLE orders ADD COLUMN overdue_at TEXT")
+    for legacy_stage, current_stage in LEGACY_STAGE_MAP.items():
+        connection.execute("UPDATE orders SET stage = ? WHERE stage = ?", (current_stage, legacy_stage))
     connection.commit()
     connection.close()

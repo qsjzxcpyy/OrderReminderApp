@@ -17,14 +17,14 @@ HEADERS = [
 ]
 
 
-def make_workbook(tmp_path, order_no="ORDER-1", latest_ship="2026-09-01 14:59"):
+def make_workbook(tmp_path, order_no="ORDER-1", latest_ship="2026-09-01 14:59", operator_note=""):
     path = tmp_path / "orders.xlsx"
     book = Workbook()
     sheet = book.active
     sheet.title = "Export orders"
     sheet.append(HEADERS)
     values = {header: "" for header in HEADERS}
-    values.update(refrence_no=order_no, date_latest_ship=latest_ship, order_status="pending")
+    values.update(refrence_no=order_no, date_latest_ship=latest_ship, order_status="pending", operator_note=operator_note)
     sheet.append([values[header] for header in HEADERS])
     book.save(path)
     return path
@@ -66,6 +66,42 @@ def test_dashboard_includes_order_selection_and_copy_controls(tmp_path):
     assert "copyOrderNo" in app_script
 
 
+def test_dashboard_includes_manual_stages_and_customer_note_column(tmp_path):
+    client = make_client(tmp_path)
+
+    index = client.get("/").text
+    app_script = client.get("/app.js").text
+
+    assert "客服备注" in index
+    assert "超卖跟进客户，未虚发" in index
+    assert "超卖跟进客户，已虚发，已退款" in index
+    assert "客服备注" in app_script
+    assert "operator_note" in app_script
+
+
+def test_order_stage_can_be_manually_saved_and_customer_note_is_searchable(tmp_path):
+    client = make_client(tmp_path)
+    import_order(client, make_workbook(tmp_path, operator_note="请客服跟进客户"))
+
+    patch = client.patch("/api/orders/ORDER-1", json={"stage": "VIRTUAL_CUSTOMER_FOLLOWUP"})
+
+    assert patch.status_code == 200
+    assert patch.json()["order"]["stage"] == "VIRTUAL_CUSTOMER_FOLLOWUP"
+    assert client.get("/api/orders", params={"stage": "VIRTUAL_CUSTOMER_FOLLOWUP"}).json()["count"] == 1
+    assert client.get("/api/orders", params={"search": "跟进客户"}).json()["count"] == 1
+
+
+def test_saving_tracking_does_not_overwrite_manually_selected_stage(tmp_path):
+    client = make_client(tmp_path)
+    import_order(client, make_workbook(tmp_path))
+    client.patch("/api/orders/ORDER-1", json={"stage": "VIRTUAL_CUSTOMER_FOLLOWUP"})
+
+    response = client.post("/api/orders/ORDER-1/tracking", json={"actual_tracking_number": "TRACK-1"})
+
+    assert response.status_code == 200
+    assert response.json()["order"]["stage"] == "VIRTUAL_CUSTOMER_FOLLOWUP"
+
+
 def test_import_lists_missing_arrival_and_keeps_human_fields(tmp_path):
     client = make_client(tmp_path)
     workbook = make_workbook(tmp_path)
@@ -73,8 +109,8 @@ def test_import_lists_missing_arrival_and_keeps_human_fields(tmp_path):
     assert first.status_code == 200
     assert first.json()["added"] == 1
     order = client.get("/api/orders/ORDER-1").json()["order"]
-    assert order["stage"] == "NEEDS_ARRIVAL_DATE"
-    assert order["stage_suggestion"] == "VIRTUAL_PENDING"
+    assert order["stage"] == "OVERSELL_CUSTOMER_UNSHIPPED"
+    assert order["stage_suggestion"] == "OVERSELL_CUSTOMER_UNSHIPPED"
     assert order["deadline_issue"] == "MISSING_ARRIVAL"
     patch = client.patch("/api/orders/ORDER-1", json={"latest_arrival_at": "2026-09-11 14:59"})
     assert patch.status_code == 200
@@ -82,7 +118,7 @@ def test_import_lists_missing_arrival_and_keeps_human_fields(tmp_path):
     second = import_order(client, workbook)
     assert second.status_code == 200
     assert second.json()["updated"] == 1
-    assert client.get("/api/orders?stage=VIRTUAL_PENDING").json()["count"] == 1
+    assert client.get("/api/orders?stage=OVERSELL_CUSTOMER_UNSHIPPED").json()["count"] == 1
 
 
 def test_order_flow_logs_history_and_enforces_tracking(tmp_path):
@@ -91,7 +127,7 @@ def test_order_flow_logs_history_and_enforces_tracking(tmp_path):
     assert client.post("/api/orders/ORDER-1/return-confirmation").status_code == 409
     tracking = client.post("/api/orders/ORDER-1/tracking", json={"actual_tracking_number": "TRACK-1"})
     assert tracking.status_code == 200
-    assert tracking.json()["order"]["stage"] == "SHIPPED_PENDING_RETURN"
+    assert tracking.json()["order"]["stage"] == "OVERSELL_CUSTOMER_UNSHIPPED"
     confirmed = client.post("/api/orders/ORDER-1/return-confirmation")
     assert confirmed.status_code == 200
     assert confirmed.json()["order"]["stage"] == "COMPLETED"
@@ -212,7 +248,7 @@ def test_list_orders_applies_stage_search_and_limit_filters(tmp_path):
     import_order(client, make_workbook(tmp_path, "ORDER-A"))
     import_order(client, make_workbook(tmp_path, "ORDER-B"))
     client.patch("/api/orders/ORDER-A", json={"latest_arrival_at": "2026-09-11 14:59"})
-    response = client.get("/api/orders", params={"stage": "VIRTUAL_PENDING", "search": "ORDER-A", "limit": 1})
+    response = client.get("/api/orders", params={"stage": "OVERSELL_CUSTOMER_UNSHIPPED", "search": "ORDER-A", "limit": 1})
     assert response.status_code == 200
     assert response.json()["count"] == 1
     assert response.json()["orders"][0]["order_no"] == "ORDER-A"

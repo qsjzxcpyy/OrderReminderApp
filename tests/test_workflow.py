@@ -1,8 +1,15 @@
 import pytest
 
 from app.workflow import (
+    ALL_STAGES,
     COMPLETED,
+    DROPSHIP_PENDING_RETURN,
+    OVERSELL_CUSTOMER_REFUNDED,
+    OVERSELL_CUSTOMER_UNSHIPPED,
+    OVERSELL_CUSTOMER_VIRTUAL,
     SHIPPED_PENDING_RETURN,
+    VIRTUAL_CUSTOMER_FOLLOWUP,
+    VIRTUAL_PENDING_RETURN,
     VIRTUAL_PENDING,
     WAITING_EXCEPTION,
     complete_exception,
@@ -20,13 +27,25 @@ def test_exception_notes_suggest_waiting_exception():
 
 
 def test_empty_tracking_and_notes_suggest_virtual_pending():
-    assert suggest_stage({"tracking_number": "", "operator_note": ""}) == VIRTUAL_PENDING
+    assert suggest_stage({"tracking_number": "", "operator_note": ""}) == OVERSELL_CUSTOMER_UNSHIPPED
 
 
 def test_user_selected_stage_is_separate_from_erp_suggestion():
     row = {"tracking_number": "", "operator_note": "waiting-for-stock", "stage": VIRTUAL_PENDING}
     assert suggest_stage(row) == WAITING_EXCEPTION
     assert row["stage"] == VIRTUAL_PENDING
+
+
+def test_all_order_stages_are_the_seven_manual_workflow_stages():
+    assert ALL_STAGES == (
+        OVERSELL_CUSTOMER_UNSHIPPED,
+        OVERSELL_CUSTOMER_VIRTUAL,
+        OVERSELL_CUSTOMER_REFUNDED,
+        VIRTUAL_PENDING_RETURN,
+        VIRTUAL_CUSTOMER_FOLLOWUP,
+        DROPSHIP_PENDING_RETURN,
+        COMPLETED,
+    )
 
 
 def test_confirm_return_requires_actual_tracking_number():

@@ -86,3 +86,14 @@ tbody tr:hover,tbody tr:focus { background:#f8fbff; }
   .queue-section { padding:0 14px 16px; }
   .filter-bar { padding:10px; }
 }
+
+.stage-cell { min-width:250px; white-space:normal; }
+.stage-select { width:100%; min-width:220px; min-height:36px; padding:7px 28px 7px 9px; color:var(--blue-dark); border:1px solid var(--line-strong); border-radius:4px; background:var(--surface); font-size:12px; font-weight:700; line-height:1.35; }
+.stage-select:hover { border-color:var(--blue); }
+.stage-select:disabled { cursor:wait; opacity:.62; }
+.note-cell { min-width:190px; max-width:260px; color:var(--muted); white-space:normal; overflow-wrap:anywhere; font-size:12px; }
+.customer-note-heading { min-width:190px; }
+@media (max-width:580px) {
+  .stage-cell { min-width:230px; }
+  .stage-select { min-width:200px; }
+}

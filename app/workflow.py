@@ -1,10 +1,35 @@
 from collections.abc import Mapping
 
 
-VIRTUAL_PENDING = "VIRTUAL_PENDING"
-WAITING_EXCEPTION = "WAITING_EXCEPTION"
-SHIPPED_PENDING_RETURN = "SHIPPED_PENDING_RETURN"
+OVERSELL_CUSTOMER_UNSHIPPED = "OVERSELL_CUSTOMER_UNSHIPPED"
+OVERSELL_CUSTOMER_VIRTUAL = "OVERSELL_CUSTOMER_VIRTUAL"
+OVERSELL_CUSTOMER_REFUNDED = "OVERSELL_CUSTOMER_REFUNDED"
+VIRTUAL_PENDING_RETURN = "VIRTUAL_PENDING_RETURN"
+VIRTUAL_CUSTOMER_FOLLOWUP = "VIRTUAL_CUSTOMER_FOLLOWUP"
+DROPSHIP_PENDING_RETURN = "DROPSHIP_PENDING_RETURN"
 COMPLETED = "COMPLETED"
+
+ALL_STAGES = (
+    OVERSELL_CUSTOMER_UNSHIPPED,
+    OVERSELL_CUSTOMER_VIRTUAL,
+    OVERSELL_CUSTOMER_REFUNDED,
+    VIRTUAL_PENDING_RETURN,
+    VIRTUAL_CUSTOMER_FOLLOWUP,
+    DROPSHIP_PENDING_RETURN,
+    COMPLETED,
+)
+TERMINAL_STAGES = {OVERSELL_CUSTOMER_REFUNDED, COMPLETED}
+LEGACY_STAGE_MAP = {
+    "NEEDS_ARRIVAL_DATE": OVERSELL_CUSTOMER_UNSHIPPED,
+    "VIRTUAL_PENDING": VIRTUAL_PENDING_RETURN,
+    "WAITING_EXCEPTION": VIRTUAL_CUSTOMER_FOLLOWUP,
+    "SHIPPED_PENDING_RETURN": DROPSHIP_PENDING_RETURN,
+}
+
+# Keep old imports and reminder fixtures compatible while data migrates.
+VIRTUAL_PENDING = VIRTUAL_PENDING_RETURN
+WAITING_EXCEPTION = VIRTUAL_CUSTOMER_FOLLOWUP
+SHIPPED_PENDING_RETURN = DROPSHIP_PENDING_RETURN
 
 _NOTE_FIELDS = ("abnormal_reason", "operator_note", "system_note")
 _WAITING_WORDS = (
@@ -20,11 +45,12 @@ def _text(value) -> str:
 def suggest_stage(row: Mapping) -> str:
     """Suggest an ERP stage without changing the user-selected stage."""
     if _text(row.get("tracking_number")):
-        return SHIPPED_PENDING_RETURN
+        shipping = _text(row.get("shipping_method_name_cn") or row.get("shipping_method_name_en")).lower()
+        return DROPSHIP_PENDING_RETURN if not shipping or "代发" in shipping or "drop ship" in shipping else VIRTUAL_PENDING_RETURN
     notes = " ".join(_text(row.get(field)).lower() for field in _NOTE_FIELDS)
     if any(word in notes for word in _WAITING_WORDS):
-        return WAITING_EXCEPTION
-    return VIRTUAL_PENDING
+        return VIRTUAL_CUSTOMER_FOLLOWUP
+    return OVERSELL_CUSTOMER_UNSHIPPED
 
 
 def confirm_return(actual_tracking_number: str) -> dict:

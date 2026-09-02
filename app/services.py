@@ -6,10 +6,10 @@ from typing import Any
 from .date_rules import LOCAL_TZ, calculate_deadline
 from .db import connect_database
 from .repositories import ERP_COLUMNS, Repository, now_iso
-from .workflow import COMPLETED, SHIPPED_PENDING_RETURN, complete_exception, confirm_return
+from .workflow import ALL_STAGES, COMPLETED, LEGACY_STAGE_MAP, complete_exception, confirm_return
 
 
-ALLOWED_STAGES = {"NEEDS_ARRIVAL_DATE", "VIRTUAL_PENDING", "WAITING_EXCEPTION", SHIPPED_PENDING_RETURN, COMPLETED}
+ALLOWED_STAGES = set(ALL_STAGES) | set(LEGACY_STAGE_MAP)
 
 
 class SecretStore:
@@ -102,8 +102,6 @@ class OrderService:
             "deadline_rule": calculated.rule,
             "deadline_issue": calculated.issue,
         }
-        if arrival and order["stage"] == "NEEDS_ARRIVAL_DATE":
-            patch["stage"] = order["stage_suggestion"] or "VIRTUAL_PENDING"
         return self.repository.update_human_fields(order_no, patch)
 
     def import_rows(self, rows: list[dict], source_name: str, summary: dict) -> dict:
@@ -130,7 +128,7 @@ class OrderService:
                 else:
                     columns = ["order_no", *sorted(ERP_COLUMNS), "stage_suggestion", "deadline_rule", "deadline_issue", "stage", "created_at", "updated_at"]
                     timestamp = now_iso()
-                    params = [order_no, *[values[field] for field in sorted(ERP_COLUMNS)], row["stage_suggestion"], "NONE", "MISSING_ARRIVAL", "NEEDS_ARRIVAL_DATE", timestamp, timestamp]
+                    params = [order_no, *[values[field] for field in sorted(ERP_COLUMNS)], row["stage_suggestion"], "NONE", "MISSING_ARRIVAL", row["stage_suggestion"], timestamp, timestamp]
                     self.connection.execute(f"INSERT INTO orders ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})", params)
                     added += 1
             result = {**summary, "added": added, "updated": updated}
@@ -142,11 +140,13 @@ class OrderService:
         clauses, params = [], []
         for key in ("stage", "deadline_issue", "erp_status"):
             if filters.get(key):
+                if key == "stage":
+                    filters[key] = LEGACY_STAGE_MAP.get(filters[key], filters[key])
                 clauses.append(f"{key} = ?")
                 params.append(filters[key])
         if filters.get("search"):
-            clauses.append("(order_no LIKE ? OR platform_user_name LIKE ? OR consignee_name LIKE ?)")
-            params.extend([f"%{filters['search']}%"] * 3)
+            clauses.append("(order_no LIKE ? OR platform_user_name LIKE ? OR consignee_name LIKE ? OR operator_note LIKE ?)")
+            params.extend([f"%{filters['search']}%"] * 4)
         sql = "SELECT * FROM orders" + (" WHERE " + " AND ".join(clauses) if clauses else "") + " ORDER BY deadline_at IS NULL, deadline_at, id LIMIT ?"
         return [self._order_dict(row) for row in self.connection.execute(sql, [*params, limit]).fetchall()]
 
@@ -168,6 +168,8 @@ class OrderService:
         order = self._require_order(order_no)
         if "stage" in patch and patch["stage"] not in ALLOWED_STAGES:
             raise ValueError("invalid order stage")
+        if "stage" in patch:
+            patch["stage"] = LEGACY_STAGE_MAP.get(patch["stage"], patch["stage"])
         arrival_changed = "latest_arrival_at" in patch
         override_changed = "deadline_override_at" in patch
         raw_arrival = patch.pop("latest_arrival_at", None)
@@ -188,7 +190,7 @@ class OrderService:
         self._require_order(order_no)
         if not tracking.strip():
             raise ValueError("actual tracking number is required")
-        self.repository.update_human_fields(order_no, {"actual_tracking_number": tracking.strip(), "stage": SHIPPED_PENDING_RETURN, "return_confirmed_at": None})
+        self.repository.update_human_fields(order_no, {"actual_tracking_number": tracking.strip(), "return_confirmed_at": None})
         self.repository.append_activity(order_no, "TRACKING_SAVED")
         return self._order_dict(self._require_order(order_no))
 

@@ -7,10 +7,11 @@ from typing import Any, Callable
 
 from .config import APP_HOST, APP_PORT
 from .date_rules import LOCAL_TZ, build_reminder_schedule
+from .workflow import ALL_STAGES, LEGACY_STAGE_MAP, TERMINAL_STAGES
 
 
 COMPLETED = "COMPLETED"
-PROCESS_STAGES = {"VIRTUAL_PENDING", "WAITING_EXCEPTION"}
+PROCESS_STAGES = (set(ALL_STAGES) - TERMINAL_STAGES) | {"VIRTUAL_PENDING", "WAITING_EXCEPTION"}
 
 
 def _parse(value: Any) -> datetime | None:
@@ -130,7 +131,7 @@ class ReminderService:
         buckets: dict[tuple[str, str], list[tuple[int, dict[str, Any]]]] = {}
         for source in self.repository.list_orders({}):
             order = dict(source)
-            if order.get("stage") == COMPLETED:
+            if order.get("stage") in TERMINAL_STAGES:
                 continue
             deadline = _parse(order.get("deadline_override_at") or order.get("deadline_at"))
             arrival = _parse(order.get("latest_arrival_at"))
