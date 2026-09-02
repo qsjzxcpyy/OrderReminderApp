@@ -77,6 +77,8 @@ def test_dashboard_includes_manual_stages_and_customer_note_column(tmp_path):
     assert "超卖跟进客户，已虚发，已退款" in index
     assert "客服备注" in app_script
     assert "operator_note" in app_script
+    assert "手动导单，未手动回传单号" in index
+    assert "手动导单，未手动回传单号" in app_script
 
 
 def test_order_stage_can_be_manually_saved_and_customer_note_is_searchable(tmp_path):
@@ -89,6 +91,17 @@ def test_order_stage_can_be_manually_saved_and_customer_note_is_searchable(tmp_p
     assert patch.json()["order"]["stage"] == "VIRTUAL_CUSTOMER_FOLLOWUP"
     assert client.get("/api/orders", params={"stage": "VIRTUAL_CUSTOMER_FOLLOWUP"}).json()["count"] == 1
     assert client.get("/api/orders", params={"search": "跟进客户"}).json()["count"] == 1
+
+
+def test_manual_import_pending_return_stage_can_be_saved_and_filtered(tmp_path):
+    client = make_client(tmp_path)
+    import_order(client, make_workbook(tmp_path))
+
+    patch = client.patch("/api/orders/ORDER-1", json={"stage": "MANUAL_IMPORT_PENDING_RETURN"})
+
+    assert patch.status_code == 200
+    assert patch.json()["order"]["stage"] == "MANUAL_IMPORT_PENDING_RETURN"
+    assert client.get("/api/orders", params={"stage": "MANUAL_IMPORT_PENDING_RETURN"}).json()["count"] == 1
 
 
 def test_saving_tracking_does_not_overwrite_manually_selected_stage(tmp_path):

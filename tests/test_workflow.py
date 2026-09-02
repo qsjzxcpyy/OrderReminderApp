@@ -4,6 +4,7 @@ from app.workflow import (
     ALL_STAGES,
     COMPLETED,
     DROPSHIP_PENDING_RETURN,
+    MANUAL_IMPORT_PENDING_RETURN,
     OVERSELL_CUSTOMER_REFUNDED,
     OVERSELL_CUSTOMER_UNSHIPPED,
     OVERSELL_CUSTOMER_VIRTUAL,
@@ -36,7 +37,7 @@ def test_user_selected_stage_is_separate_from_erp_suggestion():
     assert row["stage"] == VIRTUAL_PENDING
 
 
-def test_all_order_stages_are_the_seven_manual_workflow_stages():
+def test_all_order_stages_include_the_manual_import_pending_return_stage():
     assert ALL_STAGES == (
         OVERSELL_CUSTOMER_UNSHIPPED,
         OVERSELL_CUSTOMER_VIRTUAL,
@@ -45,6 +46,7 @@ def test_all_order_stages_are_the_seven_manual_workflow_stages():
         VIRTUAL_CUSTOMER_FOLLOWUP,
         DROPSHIP_PENDING_RETURN,
         COMPLETED,
+        MANUAL_IMPORT_PENDING_RETURN,
     )
 
 

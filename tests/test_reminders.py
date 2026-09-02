@@ -7,7 +7,7 @@ from app.db import connect_database, initialize_database
 from app.main import create_app
 from app.notifications import SmtpMailer
 from app.repositories import Repository
-from app.workflow import OVERSELL_CUSTOMER_REFUNDED
+from app.workflow import MANUAL_IMPORT_PENDING_RETURN, OVERSELL_CUSTOMER_REFUNDED
 
 
 class FakeRepository:
@@ -147,6 +147,15 @@ def test_refunded_orders_do_not_create_reminders():
     service = service_for([order(1, stage=OVERSELL_CUSTOMER_REFUNDED)])
 
     assert service.check(datetime(2026, 9, 7, 10, 0, tzinfo=LOCAL_TZ))["created"] == 0
+
+
+def test_manual_import_pending_return_stage_creates_process_day_reminder():
+    service = service_for([order(1, stage=MANUAL_IMPORT_PENDING_RETURN)])
+
+    result = service.check(datetime(2026, 9, 7, 10, 0, tzinfo=LOCAL_TZ))
+
+    assert result["created"] == 1
+    assert {event["event_type"] for event in service.repository.events.values()} == {"PROCESS_DAY"}
 
 
 def test_event_identity_changes_with_schedule_inputs_and_prevents_duplicates():
