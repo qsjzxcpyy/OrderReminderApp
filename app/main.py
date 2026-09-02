@@ -1,4 +1,5 @@
 import os
+import signal
 import tempfile
 from zipfile import BadZipFile
 from contextlib import contextmanager
@@ -15,6 +16,7 @@ from .credential_store import CredentialStore
 from .date_rules import LOCAL_TZ
 from .db import initialize_database
 from .importer import import_workbook
+from .lifecycle import ClientLifecycle
 from .notifications import SmtpMailer, WindowsNotifier
 from .reminders import ReminderService
 from .services import OrderService
@@ -43,6 +45,11 @@ class CompleteRequest(RequestModel):
 
 class DeleteOrdersRequest(RequestModel):
     order_nos: list[str] = Field(min_length=1)
+
+
+class ClientHeartbeatRequest(RequestModel):
+    client_id: str = Field(min_length=1, max_length=100)
+    active: bool = True
 
 
 class SettingsPatch(RequestModel):
@@ -78,7 +85,7 @@ class SettingsPatch(RequestModel):
         return [item.strip() for item in value] if value is not None else value
 
 
-def create_app(db_path=None, start_scheduler=False):
+def create_app(db_path=None, start_scheduler=False, shutdown_when_idle=False):
     path = Path(db_path) if db_path else Path(__file__).resolve().parent.parent / "data" / "orders.sqlite3"
     initialize_database(path)
     app = FastAPI(title="Order Reminder", version=APP_VERSION)
@@ -87,6 +94,7 @@ def create_app(db_path=None, start_scheduler=False):
     app.state.max_upload_bytes = 50 * 1024 * 1024
     app.state.windows_notifier = WindowsNotifier()
     app.state.smtp_mailer = SmtpMailer()
+    app.state.client_lifecycle = ClientLifecycle()
 
     @contextmanager
     def service():
@@ -118,6 +126,11 @@ def create_app(db_path=None, start_scheduler=False):
     @app.get("/api/health")
     def health():
         return {"ok": True, "version": APP_VERSION}
+
+    @app.post("/api/client/heartbeat")
+    def client_heartbeat(request: ClientHeartbeatRequest):
+        app.state.client_lifecycle.heartbeat(request.client_id, request.active)
+        return {"ok": True, "active": app.state.client_lifecycle.active_count}
 
     @app.post("/api/import")
     async def import_orders(file: UploadFile = File(...)):
@@ -240,6 +253,12 @@ def create_app(db_path=None, start_scheduler=False):
     if start_scheduler:
         scheduler = BackgroundScheduler(timezone=LOCAL_TZ)
         scheduler.add_job(run_reminder_check, "interval", minutes=1, id="order-reminder-check", replace_existing=True)
+        if shutdown_when_idle:
+            def stop_when_browser_closes():
+                if app.state.client_lifecycle.should_shutdown():
+                    os.kill(os.getpid(), signal.SIGTERM)
+
+            scheduler.add_job(stop_when_browser_closes, "interval", seconds=1, id="browser-lifecycle-check", replace_existing=True)
         app.state.scheduler = scheduler
 
         @app.on_event("startup")

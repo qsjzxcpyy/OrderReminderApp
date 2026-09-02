@@ -8,7 +8,7 @@ appDir = fileSystem.GetParentFolderName(WScript.ScriptFullName)
 launcher = appDir & "\start_hidden.vbs"
 browserUrl = "http://127.0.0.1:8791"
 
-shell.Run """" & launcher & """", 0, False
+shell.Run """" & launcher & """ --managed-browser", 0, False
 WScript.Sleep 1500
 
 chromePaths = Array( _

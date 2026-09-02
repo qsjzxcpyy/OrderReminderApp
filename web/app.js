@@ -2,6 +2,11 @@
   "use strict";
   const $ = (selector) => document.querySelector(selector);
   const state = { orders: [], settings: {}, detail: null, selected: new Set(), toastTimer: null };
+  const lifecycleClientId = sessionStorage.getItem("order-reminder-client-id") || (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
+  sessionStorage.setItem("order-reminder-client-id", lifecycleClientId);
+  let lifecycleTimer;
+  function sendClientHeartbeat(active = true) { const body = JSON.stringify({ client_id: lifecycleClientId, active }); if (!active && navigator.sendBeacon) { navigator.sendBeacon("/api/client/heartbeat", new Blob([body], { type: "application/json" })); return; } fetch("/api/client/heartbeat", { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: !active }).catch(() => {}); }
+  function startClientLifecycle() { sendClientHeartbeat(); lifecycleTimer = window.setInterval(() => sendClientHeartbeat(), 3000); window.addEventListener("pagehide", () => { window.clearInterval(lifecycleTimer); sendClientHeartbeat(false); }, { once: true }); }
   const stageNames = { NEEDS_ARRIVAL_DATE: "待补到货日期", VIRTUAL_PENDING: "店铺虚发", WAITING_EXCEPTION: "等货 / 异常", SHIPPED_PENDING_RETURN: "待回传物流号", COMPLETED: "已完成" };
   const riskNames = { NORMAL: "正常", OVERDUE_RISK: "日期有风险", OVERDUE: "已逾期" };
   const issueNames = { MISSING_ARRIVAL: "缺少到货时间", DATE_CONFLICT: "日期冲突", NONE: "自动计算" };
@@ -65,4 +70,5 @@
   document.addEventListener("click", (event) => { if (event.target.closest("[data-stage-order]")) event.stopPropagation(); }, true);
   $("#order-table-body").addEventListener("change", (event) => { const select = event.target.closest("[data-stage-order]"); if (select) saveStage(select); });
   syncStageFilter();
+  startClientLifecycle();
 })();

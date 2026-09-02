@@ -12,7 +12,7 @@
    ..\.venv\Scripts\python.exe -m pip install -r requirements.txt
    ```
 
-3. 双击 `launch_order_reminder.vbs`，它会隐藏启动正式服务、开启自动提醒并打开浏览器；需要查看运行日志时双击 `start_app.bat`，或运行 `..\.venv\Scripts\python.exe run_app.py`。
+3. 双击 `launch_order_reminder.vbs`，它会隐藏启动正式服务、开启自动提醒并打开浏览器。该入口会跟踪浏览器页面，关闭页面后约 3 秒自动结束本次服务进程；页面刷新会保留短暂宽限，不会误杀。需要查看运行日志时双击 `start_app.bat`，或运行 `..\.venv\Scripts\python.exe run_app.py`。
 4. 浏览器打开 http://127.0.0.1:8791 。
 
 数据文件位于 `data\orders.sqlite3`。导入 ERP 文件时选择包含 `Export orders` 工作表的 `.xlsx` 文件；重复导入会按 `refrence_no` 合并，不覆盖手工补录的到货时间、处理阶段、手动截止、实际物流号、回传确认和处理备注。
@@ -33,7 +33,7 @@
 
 ## 登录后自动启动
 
-按 `Win + R`，输入 `shell:startup` 并回车。为 `start_hidden.vbs` 创建快捷方式并放入打开的启动文件夹。它会在登录后以隐藏窗口启动本地服务，不需要管理员权限。日常手动启动直接双击 `launch_order_reminder.vbs` 即可。
+按 `Win + R`，输入 `shell:startup` 并回车。为 `start_hidden.vbs` 创建快捷方式并放入打开的启动文件夹。它会在登录后以隐藏窗口启动常驻本地服务，不需要管理员权限，即使没有打开浏览器也会继续执行提醒。日常手动启动直接双击 `launch_order_reminder.vbs` 即可。
 
 停止服务可在任务管理器结束 `python.exe`，或在运行窗口按 `Ctrl + C`。排查服务是否运行：
 

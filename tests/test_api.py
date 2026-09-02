@@ -53,6 +53,18 @@ def test_health_and_static_routes(tmp_path):
     assert client.get("/styles.css").status_code == 200
 
 
+def test_client_heartbeat_tracks_page_presence_without_touching_orders(tmp_path):
+    client = make_client(tmp_path)
+
+    online = client.post("/api/client/heartbeat", json={"client_id": "page-1"})
+    assert online.status_code == 200
+    assert client.app.state.client_lifecycle.active_count == 1
+
+    offline = client.post("/api/client/heartbeat", json={"client_id": "page-1", "active": False})
+    assert offline.status_code == 200
+    assert client.app.state.client_lifecycle.active_count == 0
+
+
 def test_dashboard_includes_order_selection_and_copy_controls(tmp_path):
     client = make_client(tmp_path)
 
