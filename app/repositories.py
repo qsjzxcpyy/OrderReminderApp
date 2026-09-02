@@ -29,6 +29,19 @@ class Repository:
     def get_order(self, order_no):
         return self.connection.execute("SELECT * FROM orders WHERE order_no = ?", (order_no,)).fetchone()
 
+    def delete_orders(self, order_nos):
+        unique_order_nos = list(dict.fromkeys(order_nos))
+        if not unique_order_nos:
+            return []
+        placeholders = ", ".join("?" for _ in unique_order_nos)
+        rows = self.connection.execute(f"SELECT order_no FROM orders WHERE order_no IN ({placeholders})", unique_order_nos).fetchall()
+        deleted = [row["order_no"] for row in rows]
+        if deleted:
+            delete_placeholders = ", ".join("?" for _ in deleted)
+            with self.connection:
+                self.connection.execute(f"DELETE FROM orders WHERE order_no IN ({delete_placeholders})", deleted)
+        return deleted
+
     def list_orders(self, filters=None):
         filters = filters or {}
         clauses, values = [], []

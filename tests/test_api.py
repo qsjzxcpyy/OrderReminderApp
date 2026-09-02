@@ -53,6 +53,19 @@ def test_health_and_static_routes(tmp_path):
     assert client.get("/styles.css").status_code == 200
 
 
+def test_dashboard_includes_order_selection_and_copy_controls(tmp_path):
+    client = make_client(tmp_path)
+
+    index = client.get("/").text
+    app_script = client.get("/app.js").text
+
+    assert 'id="select-all"' in index
+    assert 'id="delete-selected"' in index
+    assert 'id="selection-count"' in index
+    assert "navigator.clipboard" in app_script
+    assert "copyOrderNo" in app_script
+
+
 def test_import_lists_missing_arrival_and_keeps_human_fields(tmp_path):
     client = make_client(tmp_path)
     workbook = make_workbook(tmp_path)
@@ -133,6 +146,38 @@ def test_invalid_upload_and_missing_order_are_rejected(tmp_path):
     client = make_client(tmp_path)
     assert client.post("/api/import", files={"file": ("orders.csv", b"bad", "text/csv")}).status_code == 422
     assert client.get("/api/orders/missing").status_code == 404
+
+
+def test_selected_orders_can_be_deleted_and_reminder_events_are_cascaded(tmp_path):
+    client = make_client(tmp_path)
+    import_order(client, make_workbook(tmp_path, "ORDER-A"))
+    import_order(client, make_workbook(tmp_path, "ORDER-B"))
+    first = client.get("/api/orders/ORDER-A").json()["order"]
+    db = client.app.state.db_path
+    from app.db import connect_database
+    connection = connect_database(db)
+    connection.execute("INSERT INTO reminder_events (order_id, event_type, schedule_key, scheduled_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", (first["id"], "PROCESS_DAY", "selected", "2026-09-01T10:00:00+08:00", "2026-09-01T10:00:00+08:00", "2026-09-01T10:00:00+08:00"))
+    connection.commit()
+    connection.close()
+
+    response = client.request("DELETE", "/api/orders", json={"order_nos": ["ORDER-A"]})
+
+    assert response.status_code == 200
+    assert response.json() == {"deleted": 1, "not_found": []}
+    assert client.get("/api/orders/ORDER-A").status_code == 404
+    assert client.get("/api/orders/ORDER-B").status_code == 200
+    connection = connect_database(db)
+    assert connection.execute("SELECT COUNT(*) FROM reminder_events").fetchone()[0] == 0
+    assert connection.execute("SELECT action FROM activity_log WHERE action = 'ORDER_DELETED'").fetchone()[0] == "ORDER_DELETED"
+    connection.close()
+
+
+def test_delete_orders_rejects_empty_selection(tmp_path):
+    client = make_client(tmp_path)
+
+    response = client.request("DELETE", "/api/orders", json={"order_nos": []})
+
+    assert response.status_code == 422
 
 
 def test_upload_over_the_configured_limit_returns_413_without_large_fixture(tmp_path):

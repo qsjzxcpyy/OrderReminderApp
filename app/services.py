@@ -150,6 +150,14 @@ class OrderService:
         sql = "SELECT * FROM orders" + (" WHERE " + " AND ".join(clauses) if clauses else "") + " ORDER BY deadline_at IS NULL, deadline_at, id LIMIT ?"
         return [self._order_dict(row) for row in self.connection.execute(sql, [*params, limit]).fetchall()]
 
+    def delete_orders(self, order_nos: list[str]) -> dict[str, Any]:
+        requested = list(dict.fromkeys(order_no.strip() for order_no in order_nos if order_no.strip()))
+        deleted = self.repository.delete_orders(requested)
+        not_found = [order_no for order_no in requested if order_no not in deleted]
+        if deleted:
+            self.repository.append_activity(None, "ORDER_DELETED", {"order_nos": deleted})
+        return {"deleted": len(deleted), "not_found": not_found}
+
     def detail(self, order_no: str) -> dict:
         order = self._require_order(order_no)
         history = self.connection.execute("SELECT * FROM activity_log WHERE order_id = ? ORDER BY id DESC", (order["id"],)).fetchall()

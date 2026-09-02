@@ -131,6 +131,17 @@ def test_settings_roundtrip_and_activity_log(tmp_path):
     assert json.loads(row["details_json"]) == {"rows": 1}
 
 
+def test_delete_orders_removes_orders_and_keeps_delete_activity(tmp_path):
+    repository = make_repo(tmp_path)
+    repository.upsert_erp_snapshot("ORD-1", {"order_status": "pending"}, "2026-09-01T10:00:00+08:00")
+
+    assert repository.delete_orders(["ORD-1"]) == ["ORD-1"]
+    repository.append_activity(None, "ORDER_DELETED", {"order_nos": ["ORD-1"]})
+
+    assert repository.get_order("ORD-1") is None
+    assert repository.connection.execute("SELECT action FROM activity_log WHERE action = 'ORDER_DELETED'").fetchone()[0] == "ORDER_DELETED"
+
+
 def test_list_orders_filters(tmp_path):
     repository = make_repo(tmp_path)
     repository.upsert_erp_snapshot("ORD-1", snapshot(), "2026-08-28T09:00:00+08:00")

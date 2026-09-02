@@ -41,6 +41,10 @@ class CompleteRequest(RequestModel):
     processing_note: str
 
 
+class DeleteOrdersRequest(RequestModel):
+    order_nos: list[str] = Field(min_length=1)
+
+
 class SettingsPatch(RequestModel):
     compensation_days: int | None = None
     windows_notifications_enabled: bool | None = None
@@ -145,6 +149,14 @@ def create_app(db_path=None, start_scheduler=False):
         with service() as orders:
             rows = orders.list_orders({"stage": stage, "deadline_issue": deadline_issue, "erp_status": erp_status, "search": search}, limit)
             return {"count": len(rows), "orders": rows}
+
+    @app.delete("/api/orders")
+    def delete_orders(request: DeleteOrdersRequest):
+        with service() as orders:
+            result = orders.delete_orders(request.order_nos)
+        if result["deleted"] == 0:
+            raise HTTPException(404, "没有找到可删除的订单")
+        return result
 
     @app.get("/api/orders/{order_no}")
     def order_detail(order_no: str):

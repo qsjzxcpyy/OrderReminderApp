@@ -21,3 +21,11 @@ def test_production_entrypoint_enables_scheduler():
 
     create_app.assert_called_once_with(start_scheduler=True)
     run.assert_called_once_with("production-app", host=APP_HOST, port=APP_PORT)
+
+
+def test_order_reminder_launcher_prefers_chrome():
+    project_root = Path(__file__).parents[1]
+    launcher = (project_root / "launch_order_reminder.vbs").read_text(encoding="utf-8")
+
+    assert "chrome.exe" in launcher.lower()
+    assert "--new-window" in launcher
