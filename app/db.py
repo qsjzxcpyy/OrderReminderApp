@@ -44,6 +44,7 @@ def initialize_database(db_path):
             deadline_override_at TEXT,
             deadline_rule TEXT NOT NULL DEFAULT 'NONE',
             deadline_issue TEXT NOT NULL DEFAULT 'MISSING_ARRIVAL',
+            reminder_mode TEXT NOT NULL DEFAULT 'UNSCHEDULED',
             stage TEXT NOT NULL DEFAULT 'NEEDS_ARRIVAL_DATE',
             stage_suggestion TEXT,
             actual_tracking_number TEXT,
@@ -100,6 +101,27 @@ def initialize_database(db_path):
     columns = {row[1] for row in connection.execute("PRAGMA table_info(orders)")}
     if "overdue_at" not in columns:
         connection.execute("ALTER TABLE orders ADD COLUMN overdue_at TEXT")
+    if "reminder_mode" not in columns:
+        connection.execute("ALTER TABLE orders ADD COLUMN reminder_mode TEXT NOT NULL DEFAULT 'UNSCHEDULED'")
+        connection.execute("UPDATE orders SET reminder_mode = 'LONG_TERM' WHERE latest_arrival_at IS NOT NULL")
+    if "custom_stage" not in columns:
+        connection.execute("ALTER TABLE orders ADD COLUMN custom_stage TEXT")
+    connection.execute(
+        """
+        UPDATE orders
+        SET deadline_at = substr(deadline_at, 1, 11) || CASE
+                WHEN deadline_rule = 'QUICK_TODAY' THEN '18:00:00+08:00'
+                ELSE '11:00:00+08:00'
+            END,
+            deadline_override_at = substr(deadline_override_at, 1, 11) || CASE
+                WHEN deadline_rule = 'QUICK_TODAY' THEN '18:00:00+08:00'
+                ELSE '11:00:00+08:00'
+            END
+        WHERE deadline_rule IN ('QUICK_TODAY', 'QUICK_TOMORROW')
+          AND substr(deadline_at, 12, 8) = '23:59:00'
+          AND substr(deadline_override_at, 12, 8) = '23:59:00'
+        """
+    )
     for legacy_stage, current_stage in LEGACY_STAGE_MAP.items():
         connection.execute("UPDATE orders SET stage = ? WHERE stage = ?", (current_stage, legacy_stage))
     connection.commit()

@@ -1,11 +1,15 @@
 import hashlib
+import json
 from pathlib import Path
+import re
+import subprocess
 import tempfile
 
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
 from app.main import create_app
+from app.db import connect_database
 
 
 HEADERS = [
@@ -78,6 +82,45 @@ def test_dashboard_includes_order_selection_and_copy_controls(tmp_path):
     assert "copyOrderNo" in app_script
 
 
+def test_dashboard_has_collapsible_completed_orders_and_deadline_sort(tmp_path):
+    client = make_client(tmp_path)
+
+    index = client.get("/").text
+    app_script = client.get("/app.js").text
+
+    assert '<details id="completed-orders-section"' in index
+    assert 'id="completed-order-table-body"' in index
+    assert '<details id="completed-orders-section" open' not in index
+    assert "sortOrdersByDeadline" in app_script
+    assert "if (!aDeadline && bDeadline) return -1" in app_script
+    assert "if (aDeadline && !bDeadline) return 1" in app_script
+    assert "String(bDeadline).localeCompare(String(aDeadline))" in app_script
+
+
+def test_dashboard_includes_bulk_complete_action(tmp_path):
+    client = make_client(tmp_path)
+
+    index = client.get("/").text
+    app_script = client.get("/app.js").text
+
+    assert 'id="quick-complete"' in index
+    assert "applyCompletionToSelected" in app_script
+    assert 'stage: "COMPLETED"' in app_script
+
+
+def test_shift_selection_is_handled_on_checkbox_click_and_toolbar_has_layout_hooks(tmp_path):
+    client = make_client(tmp_path)
+    app_script = client.get("/app.js").text
+    styles = client.get("/styles.css").text
+
+    assert "selectionAnchor" in app_script
+    assert "event.shiftKey" in app_script
+    assert 'addEventListener("change", (event) => { const checkbox' not in app_script
+    assert ".bulk-stage-field" in styles
+    assert ".summary-tomorrow" in styles
+    assert ".summary-long-term" in styles
+
+
 def test_dashboard_includes_manual_stages_and_customer_note_column(tmp_path):
     client = make_client(tmp_path)
 
@@ -85,12 +128,189 @@ def test_dashboard_includes_manual_stages_and_customer_note_column(tmp_path):
     app_script = client.get("/app.js").text
 
     assert "客服备注" in index
-    assert "超卖跟进客户，未虚发" in index
-    assert "超卖跟进客户，已虚发，已退款" in index
     assert "客服备注" in app_script
     assert "operator_note" in app_script
-    assert "手动导单，未手动回传单号" in index
-    assert "手动导单，未手动回传单号" in app_script
+    assert "自定义处理阶段" in index
+    assert "处理完成" in index
+
+
+def test_dashboard_includes_unprocessed_orders_summary_filter(tmp_path):
+    client = make_client(tmp_path)
+
+    index = client.get("/").text
+    app_script = client.get("/app.js").text
+
+    assert 'data-summary-filter="UNPROCESSED"' in index
+    assert 'id="summary-unprocessed"' in index
+    assert "UNPROCESSED" in app_script
+    assert "!isCompleted(order)" in app_script
+    assert "hasCustomStage(order)" in app_script
+    assert "hasProcessingDeadline(order)" in app_script
+
+
+def test_dashboard_assets_and_api_requests_disable_stale_cache(tmp_path):
+    client = make_client(tmp_path)
+
+    index_response = client.get("/")
+    app_response = client.get("/app.js")
+    styles_response = client.get("/styles.css")
+
+    assert index_response.headers["cache-control"] == "no-store, max-age=0"
+    assert app_response.headers["cache-control"] == "no-store, max-age=0"
+    assert styles_response.headers["cache-control"] == "no-store, max-age=0"
+    assert "/app.js?v=20260909-3" in index_response.text
+    assert "/styles.css?v=20260909-3" in index_response.text
+    assert 'cache: "no-store"' in app_response.text
+
+
+def test_unprocessed_filter_includes_custom_stage_without_deadline_and_blank_deadline(tmp_path):
+    client = make_client(tmp_path)
+    app_script = client.get("/app.js").text
+    is_completed = re.search(r"function isCompleted\(order\) \{[^}]+\}", app_script)
+    has_stage = re.search(r"function hasCustomStage\(order\) \{[^}]+\}", app_script)
+    has_deadline = re.search(r"function hasProcessingDeadline\(order\) \{[^}]+\}", app_script)
+    is_unprocessed = re.search(r"function isUnprocessed\(order\) \{[^}]+\}", app_script)
+    assert all((is_completed, has_stage, has_deadline, is_unprocessed))
+    node_script = f"""
+const terminalStages = new Set(["OVERSELL_CUSTOMER_REFUNDED", "COMPLETED"]);
+{is_completed.group(0)}
+{has_stage.group(0)}
+{has_deadline.group(0)}
+{is_unprocessed.group(0)}
+const actual = [
+  {{ stage: "CUSTOM_STAGE", custom_stage: "waiting", deadline_at: null, deadline_override_at: null }},
+  {{ stage: "CUSTOM_STAGE", custom_stage: "waiting", deadline_at: "", deadline_override_at: "" }},
+  {{ stage: "CUSTOM_STAGE", custom_stage: "", deadline_at: "", deadline_override_at: "" }},
+  {{ stage: "CUSTOM_STAGE", custom_stage: "waiting", deadline_at: "2026-09-09T18:00:00+08:00", deadline_override_at: null }},
+].map(isUnprocessed);
+if (JSON.stringify(actual) !== JSON.stringify([true, true, true, false])) process.exit(1);
+"""
+    result = subprocess.run(["node", "-e", node_script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_dashboard_uses_freeform_stage_editor_and_removes_erp_stage_filters(tmp_path):
+    client = make_client(tmp_path)
+
+    index = client.get("/").text
+    app_script = client.get("/app.js").text
+
+    assert 'id="stage-filter"' not in index
+    assert 'id="erp-filter"' not in index
+    assert 'id="detail-status-input"' in index
+    assert 'id="save-custom-stage"' in index
+    assert "stageOptions" not in app_script
+    assert "stage-select" not in app_script
+    assert "custom-stage-input" in app_script
+
+
+def test_overdue_summary_filter_clears_conflicting_risk_filter(tmp_path):
+    client = make_client(tmp_path)
+    app_script = client.get("/app.js").text
+    apply_summary = re.search(r"function applySummaryFilter\(filter\) \{[^}]+\}", app_script)
+    assert apply_summary
+
+    node_script = f"""
+const state = {{ summaryFilter: "", selected: new Set() }};
+const controls = {{ "#risk-filter": {{ value: "NORMAL" }} }};
+function $(selector) {{ return controls[selector]; }}
+function renderSummary() {{}}
+function renderTable() {{}}
+{apply_summary.group(0)}
+applySummaryFilter("OVERDUE");
+if (controls["#risk-filter"].value !== "") {{
+  console.error(controls["#risk-filter"].value);
+  process.exit(1);
+}}
+"""
+    result = subprocess.run(["node", "-e", node_script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_saving_custom_stage_marks_order_as_in_progress(tmp_path):
+    client = make_client(tmp_path)
+    import_order(client, make_workbook(tmp_path))
+
+    response = client.patch(
+        "/api/orders/ORDER-1",
+        json={"custom_stage": "等待供应商补货"},
+    )
+
+    assert response.status_code == 200
+    order = response.json()["order"]
+    assert order["stage"] == "CUSTOM_STAGE"
+    assert order["custom_stage"] == "等待供应商补货"
+
+
+def test_detail_status_can_mark_order_completed(tmp_path):
+    client = make_client(tmp_path)
+    import_order(client, make_workbook(tmp_path))
+
+    response = client.patch(
+        "/api/orders/ORDER-1",
+        json={"stage": "COMPLETED", "custom_stage": None},
+    )
+
+    assert response.status_code == 200
+    order = response.json()["order"]
+    assert order["stage"] == "COMPLETED"
+    assert order["completed_at"] is not None
+
+
+def test_dashboard_uses_processing_deadline_for_today_count_and_hides_arrival_fields(tmp_path):
+    client = make_client(tmp_path)
+
+    index = client.get("/").text
+    app_script = client.get("/app.js").text
+    styles = client.get("/styles.css").text
+
+    assert 'id="summary-missing"' not in index
+    assert "最晚发货</th>" not in index
+    assert "最晚到货</th>" not in index
+    assert 'id="arrival-input"' not in index
+    assert 'dateKey(order.deadline_override_at || order.deadline_at) === shanghaiToday()' in app_script
+    assert 'order.reminder_mode === "TODAY"' not in app_script.split("function dueToday", 1)[1].split("function isOverdue", 1)[0]
+    assert "18:00" in app_script
+    assert "11:00" in app_script
+    assert "T00:00:00Z" in app_script
+    assert 'reminder-mode-input").addEventListener("change"' in app_script
+    assert "latest_arrival_at) === today" not in app_script
+    assert "custom_stage" in app_script
+    assert "自定义处理阶段" in app_script
+    assert "save-custom-stage" in app_script
+    assert 'id="summary-total"' in index
+    assert 'id="summary-today"' in index
+    assert 'id="summary-overdue"' in index
+    assert "summary-filter" in app_script
+    assert 'href="/styles.css?v=20260909-3"' in index
+    assert 'src="/app.js?v=20260909-3"' in index
+    assert ".drawer-body > .detail-section:has(#tracking-input)" in styles
+    assert ".drawer-body > .detail-section:has(#exception-result)" in styles
+    assert ".drawer-body > .detail-section:has(#detail-platform)" in styles
+
+    due_today = re.search(r"function dueToday\(order\) \{[^}]+\}", app_script)
+    assert due_today
+    orders = [
+        {"stage": "VIRTUAL_PENDING_RETURN", "reminder_mode": "TODAY", "deadline_at": "2026-09-04T18:00:00+08:00"},
+        {"stage": "CUSTOM_STAGE", "reminder_mode": "TOMORROW", "deadline_at": "2026-09-04T11:00:00+08:00"},
+        {"stage": "DROPSHIP_PENDING_RETURN", "reminder_mode": "TOMORROW", "deadline_at": "2026-09-05T11:00:00+08:00"},
+        {"stage": "COMPLETED", "reminder_mode": "TODAY", "deadline_at": "2026-09-04T18:00:00+08:00"},
+    ]
+    node_script = f"""
+const terminalStages = new Set(["OVERSELL_CUSTOMER_REFUNDED", "COMPLETED"]);
+function isUnfinished(order) {{ return !terminalStages.has(order.stage); }}
+function dateKey(value) {{ return value ? String(value).slice(0, 10) : ""; }}
+function shanghaiToday() {{ return "2026-09-04"; }}
+{due_today.group(0)}
+const actual = {json.dumps(orders)}.map(dueToday);
+const expected = [true, true, false, false];
+if (JSON.stringify(actual) !== JSON.stringify(expected)) {{
+  console.error(JSON.stringify({{ actual, expected }}));
+  process.exit(1);
+}}
+"""
+    result = subprocess.run(["node", "-e", node_script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_order_stage_can_be_manually_saved_and_customer_note_is_searchable(tmp_path):
@@ -146,6 +366,140 @@ def test_import_lists_missing_arrival_and_keeps_human_fields(tmp_path):
     assert client.get("/api/orders?stage=OVERSELL_CUSTOMER_UNSHIPPED").json()["count"] == 1
 
 
+def test_order_can_save_quick_processing_mode_without_arrival_date(tmp_path):
+    client = make_client(tmp_path)
+    import_order(client, make_workbook(tmp_path))
+
+    response = client.patch(
+        "/api/orders/ORDER-1",
+        json={"reminder_mode": "TODAY", "process_date": "2026-09-02"},
+    )
+
+    assert response.status_code == 200
+    order = response.json()["order"]
+    assert order["reminder_mode"] == "TODAY"
+    assert order["deadline_at"] == "2026-09-02T18:00:00+08:00"
+    assert order["latest_arrival_at"] is None
+
+
+def test_quick_processing_defaults_to_six_pm_and_accepts_manual_deadline(tmp_path):
+    client = make_client(tmp_path)
+    import_order(client, make_workbook(tmp_path))
+
+    response = client.patch(
+        "/api/orders/ORDER-1",
+        json={"reminder_mode": "TODAY", "process_date": "2026-09-02"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["order"]["deadline_at"] == "2026-09-02T18:00:00+08:00"
+
+    response = client.patch(
+        "/api/orders/ORDER-1",
+        json={
+            "reminder_mode": "TODAY",
+            "process_date": "2026-09-02",
+            "deadline_override_at": "2026-09-02 10:30",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["order"]["deadline_at"] == "2026-09-02T10:30:00+08:00"
+
+
+def test_tomorrow_processing_defaults_to_next_day_eleven_am(tmp_path):
+    client = make_client(tmp_path)
+    import_order(client, make_workbook(tmp_path))
+
+    response = client.patch(
+        "/api/orders/ORDER-1",
+        json={"reminder_mode": "TOMORROW", "process_date": "2026-09-02"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["order"]["deadline_at"] == "2026-09-02T11:00:00+08:00"
+
+
+def test_existing_quick_orders_with_old_default_time_are_migrated_to_six_pm(tmp_path):
+    client = make_client(tmp_path)
+    import_order(client, make_workbook(tmp_path))
+    client.patch("/api/orders/ORDER-1", json={"reminder_mode": "TODAY", "process_date": "2026-09-02"})
+
+    connection = connect_database(client.app.state.db_path)
+    connection.execute(
+        "UPDATE orders SET deadline_at = ?, deadline_override_at = ? WHERE order_no = ?",
+        ("2026-09-02T23:59:00+08:00", "2026-09-02T23:59:00+08:00", "ORDER-1"),
+    )
+    connection.commit()
+    connection.close()
+
+    reopened = make_client(tmp_path)
+
+    assert reopened.get("/api/orders/ORDER-1").json()["order"]["deadline_at"] == "2026-09-02T18:00:00+08:00"
+
+
+def test_existing_tomorrow_orders_with_old_default_time_are_migrated_to_eleven_am(tmp_path):
+    client = make_client(tmp_path)
+    import_order(client, make_workbook(tmp_path))
+    client.patch("/api/orders/ORDER-1", json={"reminder_mode": "TOMORROW", "process_date": "2026-09-02"})
+
+    connection = connect_database(client.app.state.db_path)
+    connection.execute(
+        "UPDATE orders SET deadline_at = ?, deadline_override_at = ? WHERE order_no = ?",
+        ("2026-09-02T23:59:00+08:00", "2026-09-02T23:59:00+08:00", "ORDER-1"),
+    )
+    connection.commit()
+    connection.close()
+
+    reopened = make_client(tmp_path)
+
+    assert reopened.get("/api/orders/ORDER-1").json()["order"]["deadline_at"] == "2026-09-02T11:00:00+08:00"
+
+
+def test_long_term_reminder_only_needs_a_manual_deadline(tmp_path):
+    client = make_client(tmp_path)
+    import_order(client, make_workbook(tmp_path))
+
+    response = client.patch(
+        "/api/orders/ORDER-1",
+        json={"reminder_mode": "LONG_TERM", "deadline_override_at": "2026-09-20 09:15"},
+    )
+
+    assert response.status_code == 200
+    order = response.json()["order"]
+    assert order["deadline_at"] == "2026-09-20T09:15:00+08:00"
+    assert order["deadline_rule"] == "MANUAL"
+    assert order["latest_arrival_at"] is None
+
+
+def test_order_can_save_custom_processing_status(tmp_path):
+    client = make_client(tmp_path)
+    import_order(client, make_workbook(tmp_path))
+
+    response = client.patch(
+        "/api/orders/ORDER-1",
+        json={"custom_stage": "等待供应商补货，周五再次确认"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["order"]["custom_stage"] == "等待供应商补货，周五再次确认"
+
+
+def test_custom_stage_option_can_be_saved_as_the_current_stage(tmp_path):
+    client = make_client(tmp_path)
+    import_order(client, make_workbook(tmp_path))
+
+    response = client.patch(
+        "/api/orders/ORDER-1",
+        json={"stage": "CUSTOM_STAGE", "custom_stage": "等待供应商确认库存"},
+    )
+
+    assert response.status_code == 200
+    order = response.json()["order"]
+    assert order["stage"] == "CUSTOM_STAGE"
+    assert order["custom_stage"] == "等待供应商确认库存"
+
+
 def test_order_flow_logs_history_and_enforces_tracking(tmp_path):
     client = make_client(tmp_path)
     import_order(client, make_workbook(tmp_path))
@@ -163,9 +517,7 @@ def test_order_flow_logs_history_and_enforces_tracking(tmp_path):
 def test_manual_deadline_and_exception_completion_validation(tmp_path):
     client = make_client(tmp_path)
     import_order(client, make_workbook(tmp_path))
-    assert client.patch("/api/orders/ORDER-1", json={"deadline_override_at": "2026-09-05 10:00"}).status_code == 422
-    client.patch("/api/orders/ORDER-1", json={"latest_arrival_at": "2026-09-11 14:59"})
-    assert client.patch("/api/orders/ORDER-1", json={"deadline_override_at": "2026-09-12 10:00"}).status_code == 422
+    assert client.patch("/api/orders/ORDER-1", json={"deadline_override_at": "2026-09-05 10:00"}).status_code == 200
     assert client.post("/api/orders/ORDER-1/complete", json={"processing_result": "done", "processing_note": ""}).status_code == 422
     done = client.post("/api/orders/ORDER-1/complete", json={"processing_result": "cancelled", "processing_note": "handled"})
     assert done.status_code == 200
@@ -287,6 +639,20 @@ def test_order_risk_is_overdue_in_list_and_detail(tmp_path):
     assert client.post("/api/reminders/check").status_code == 200
     assert client.get("/api/orders").json()["orders"][0]["risk"] == "OVERDUE"
     assert client.get("/api/orders/ORDER-1").json()["order"]["risk"] == "OVERDUE"
+
+
+def test_order_risk_returns_to_normal_after_deadline_is_moved_to_the_future(tmp_path):
+    client = make_client(tmp_path)
+    import_order(client, make_workbook(tmp_path))
+    assert client.patch("/api/orders/ORDER-1", json={"deadline_override_at": "2026-08-27 10:00"}).status_code == 200
+    assert client.post("/api/reminders/check").status_code == 200
+    assert client.get("/api/orders/ORDER-1").json()["order"]["risk"] == "OVERDUE"
+
+    response = client.patch("/api/orders/ORDER-1", json={"deadline_override_at": "2026-09-20 10:00"})
+
+    assert response.status_code == 200
+    assert response.json()["order"]["risk"] == "NORMAL"
+    assert client.get("/api/orders/ORDER-1").json()["order"]["risk"] == "NORMAL"
 
 
 def test_order_detail_includes_reminder_events_and_channel_status(tmp_path):

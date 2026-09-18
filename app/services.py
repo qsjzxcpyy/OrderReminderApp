@@ -1,15 +1,18 @@
 import json
-from datetime import datetime
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any
 
 from .date_rules import LOCAL_TZ, calculate_deadline
 from .db import connect_database
 from .repositories import ERP_COLUMNS, Repository, now_iso
-from .workflow import ALL_STAGES, COMPLETED, LEGACY_STAGE_MAP, complete_exception, confirm_return
+from .workflow import (
+    ALL_STAGES, COMPLETED, CUSTOM_STAGE, LEGACY_STAGE_MAP, LONG_TERM, QUICK_REMINDER_MODES,
+    REMINDER_MODES, TERMINAL_STAGES, TODAY, TOMORROW, UNSCHEDULED, complete_exception, confirm_return,
+)
 
 
-ALLOWED_STAGES = set(ALL_STAGES) | set(LEGACY_STAGE_MAP)
+ALLOWED_STAGES = set(ALL_STAGES) | set(LEGACY_STAGE_MAP) | {CUSTOM_STAGE}
 
 
 class SecretStore:
@@ -67,7 +70,9 @@ class OrderService:
     def _order_dict(self, order) -> dict[str, Any]:
         result = dict(order)
         issue = result.get("deadline_issue")
-        if result.get("overdue_at"):
+        deadline = _stored_datetime(result.get("deadline_override_at") or result.get("deadline_at"))
+        overdue = result.get("stage") not in TERMINAL_STAGES and deadline is not None and datetime.now(LOCAL_TZ) >= deadline
+        if overdue:
             result["risk"] = "OVERDUE"
         else:
             result["risk"] = "OVERDUE_RISK" if issue in {"MISSING_ARRIVAL", "DATE_CONFLICT"} else "NORMAL"
@@ -80,16 +85,17 @@ class OrderService:
             raise LookupError("order not found")
         return order
 
+    def _cancel_pending_reminders(self, order):
+        self.repository.cancel_pending_reminder_events(order["id"])
+
     def _apply_deadline(self, order_no: str, arrival: datetime | None, override: datetime | None = None):
         order = self._require_order(order_no)
+        self._cancel_pending_reminders(order)
         if override is not None:
-            if arrival is None:
-                raise ValueError("latest_arrival_at is required for a manual deadline")
-            if override > arrival:
-                raise ValueError("manual deadline cannot be later than latest arrival")
             return self.repository.update_human_fields(order_no, {
-                "latest_arrival_at": arrival.isoformat(), "deadline_override_at": override.isoformat(),
+                "latest_arrival_at": arrival.isoformat() if arrival else None, "deadline_override_at": override.isoformat(),
                 "deadline_at": override.isoformat(), "deadline_rule": "MANUAL", "deadline_issue": "NONE",
+                "reminder_mode": LONG_TERM, "overdue_at": None,
             })
         ship = _stored_datetime(order["latest_ship_at"])
         if ship is None:
@@ -101,8 +107,62 @@ class OrderService:
             "deadline_at": calculated.deadline_at.isoformat() if calculated.deadline_at else None,
             "deadline_rule": calculated.rule,
             "deadline_issue": calculated.issue,
+            "reminder_mode": LONG_TERM, "overdue_at": None,
         }
         return self.repository.update_human_fields(order_no, patch)
+
+    @staticmethod
+    def _parse_process_date(value: str | None) -> date:
+        if value is None:
+            return datetime.now(LOCAL_TZ).date()
+        try:
+            return datetime.strptime(value, "%Y-%m-%d").date()
+        except (TypeError, ValueError) as error:
+            raise ValueError("process_date must use YYYY-MM-DD") from error
+
+    def _apply_reminder_mode(self, order_no: str, mode: str, process_date: str | None = None, deadline_override: datetime | None = None):
+        if mode not in REMINDER_MODES:
+            raise ValueError("invalid reminder mode")
+        order = self._require_order(order_no)
+        self._cancel_pending_reminders(order)
+        if mode in QUICK_REMINDER_MODES:
+            calendar_date = deadline_override.date() if deadline_override is not None else self._parse_process_date(process_date)
+            default_time = time(18, 0) if mode == TODAY else time(11, 0)
+            deadline = deadline_override or datetime.combine(calendar_date, default_time, tzinfo=LOCAL_TZ)
+            rule = "QUICK_TODAY" if mode == TODAY else "QUICK_TOMORROW"
+            return self.repository.update_human_fields(order_no, {
+                "reminder_mode": mode,
+                "deadline_at": deadline.isoformat(),
+                "deadline_override_at": deadline.isoformat(),
+                "deadline_rule": rule,
+                "deadline_issue": "NONE", "overdue_at": None,
+            })
+        if mode == UNSCHEDULED:
+            issue = "NONE" if order["latest_arrival_at"] else "MISSING_ARRIVAL"
+            return self.repository.update_human_fields(order_no, {
+                "reminder_mode": mode,
+                "deadline_at": None,
+                "deadline_override_at": None,
+                "deadline_rule": "NONE",
+                "deadline_issue": issue, "overdue_at": None,
+            })
+        if deadline_override is not None:
+            return self.repository.update_human_fields(order_no, {
+                "deadline_at": deadline_override.isoformat(),
+                "deadline_override_at": deadline_override.isoformat(),
+                "deadline_rule": "MANUAL",
+                "deadline_issue": "NONE",
+                "reminder_mode": LONG_TERM, "overdue_at": None,
+            })
+        if order["deadline_at"] is None:
+            return self.repository.update_human_fields(order_no, {
+                "reminder_mode": LONG_TERM,
+                "deadline_at": None,
+                "deadline_override_at": None,
+                "deadline_rule": "NONE",
+                "deadline_issue": "MISSING_ARRIVAL", "overdue_at": None,
+            })
+        return self.repository.update_human_fields(order_no, {"reminder_mode": LONG_TERM})
 
     def import_rows(self, rows: list[dict], source_name: str, summary: dict) -> dict:
         added = updated = 0
@@ -170,13 +230,40 @@ class OrderService:
             raise ValueError("invalid order stage")
         if "stage" in patch:
             patch["stage"] = LEGACY_STAGE_MAP.get(patch["stage"], patch["stage"])
+        if "custom_stage" in patch:
+            custom_stage = patch["custom_stage"]
+            if custom_stage is not None and not isinstance(custom_stage, str):
+                raise ValueError("custom_stage must be text")
+            custom_stage = custom_stage.strip() if custom_stage is not None else None
+            if custom_stage and len(custom_stage) > 200:
+                raise ValueError("custom_stage must not exceed 200 characters")
+            patch["custom_stage"] = custom_stage or None
+            if custom_stage and "stage" not in patch:
+                patch["stage"] = CUSTOM_STAGE
+        if patch.get("stage") == CUSTOM_STAGE and not patch.get("custom_stage") and not order["custom_stage"]:
+            raise ValueError("custom_stage is required for a custom stage")
+        if patch.get("stage") in TERMINAL_STAGES:
+            self._cancel_pending_reminders(order)
+            if patch.get("stage") == COMPLETED:
+                patch["completed_at"] = now_iso()
+        elif patch.get("stage") == CUSTOM_STAGE:
+            patch["completed_at"] = None
+        mode_changed = "reminder_mode" in patch
+        raw_mode = patch.pop("reminder_mode", None)
+        process_date = patch.pop("process_date", None)
+        if process_date is not None and not mode_changed:
+            raise ValueError("process_date requires reminder_mode")
         arrival_changed = "latest_arrival_at" in patch
         override_changed = "deadline_override_at" in patch
         raw_arrival = patch.pop("latest_arrival_at", None)
         raw_override = patch.pop("deadline_override_at", None)
         arrival = parse_local_datetime(raw_arrival, "latest_arrival_at") if arrival_changed else _stored_datetime(order["latest_arrival_at"])
         override = parse_local_datetime(raw_override, "deadline_override_at") if override_changed and raw_override is not None else None
-        if arrival_changed or override_changed:
+        deadline_handled = False
+        if mode_changed:
+            self._apply_reminder_mode(order_no, raw_mode, process_date, override)
+            deadline_handled = raw_mode in QUICK_REMINDER_MODES or raw_mode == LONG_TERM
+        if (arrival_changed or override_changed) and not deadline_handled:
             if override is not None:
                 self._apply_deadline(order_no, arrival, override)
             else:
@@ -205,7 +292,8 @@ class OrderService:
         return self._order_dict(self._require_order(order_no))
 
     def complete(self, order_no: str, processing_result: str, processing_note: str) -> dict:
-        self._require_order(order_no)
+        order = self._require_order(order_no)
+        self._cancel_pending_reminders(order)
         result = complete_exception(processing_result, processing_note)
         self.repository.update_human_fields(order_no, {**result, "completed_at": now_iso()})
         self.repository.append_activity(order_no, "EXCEPTION_COMPLETED")

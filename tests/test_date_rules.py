@@ -60,16 +60,16 @@ def test_missing_arrival_requires_manual_completion():
     assert result.issue == "MISSING_ARRIVAL"
 
 
-def test_reminders_use_10am_local_time_and_arrival_date_not_arrival_time():
+def test_reminders_use_processing_deadline_time_and_arrival_dates():
     schedule = build_reminder_schedule(
         deadline_at=arrival_at("2026-09-11 14:59"),
         arrival_at=arrival_at("2026-09-11 14:59"),
     )
 
     assert schedule == {
-        "PROCESS_DAY": local_at("2026-09-11 10:00"),
-        "ARRIVAL_EVE": local_at("2026-09-10 10:00"),
-        "ARRIVAL_DAY": local_at("2026-09-11 10:00"),
+        "PROCESS_DAY": local_at("2026-09-11 14:59"),
+        "ARRIVAL_EVE": local_at("2026-09-10 14:59"),
+        "ARRIVAL_DAY": local_at("2026-09-11 14:59"),
     }
 
 
@@ -85,7 +85,15 @@ def test_manual_deadline_can_build_a_schedule():
         arrival_at=local_at("2026-09-25 14:59"),
     )
 
-    assert schedule["PROCESS_DAY"] == local_at("2026-09-20 10:00")
+    assert schedule["PROCESS_DAY"] == local_at("2026-09-20 08:30")
+
+
+def test_process_day_schedule_accepts_a_quick_order_without_arrival():
+    from app.date_rules import build_process_day_schedule
+
+    schedule = build_process_day_schedule(local_at("2026-09-02 23:59"))
+
+    assert schedule == {"PROCESS_DAY": local_at("2026-09-02 23:59")}
 
 
 def test_missing_deadline_is_rejected_for_schedule():

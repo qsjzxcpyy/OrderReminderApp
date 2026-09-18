@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable
 
 from .config import APP_HOST, APP_PORT
-from .date_rules import LOCAL_TZ, build_reminder_schedule
-from .workflow import ALL_STAGES, LEGACY_STAGE_MAP, TERMINAL_STAGES
+from .date_rules import LOCAL_TZ, build_process_day_schedule, build_reminder_schedule
+from .workflow import ALL_STAGES, CUSTOM_STAGE, LEGACY_STAGE_MAP, LONG_TERM, QUICK_REMINDER_MODES, TERMINAL_STAGES, UNSCHEDULED
 
 
 COMPLETED = "COMPLETED"
-PROCESS_STAGES = (set(ALL_STAGES) - TERMINAL_STAGES) | {"VIRTUAL_PENDING", "WAITING_EXCEPTION"}
+PROCESS_STAGES = (set(ALL_STAGES) - TERMINAL_STAGES) | {CUSTOM_STAGE, "VIRTUAL_PENDING", "WAITING_EXCEPTION"}
 
 
 def _parse(value: Any) -> datetime | None:
@@ -42,6 +42,7 @@ class ReminderService:
         self.windows = windows
         self.email = email
         self.secret_provider = secret_provider
+        self._late_process_day_reminders: dict[int, tuple[datetime, datetime]] = {}
 
     def _settings(self) -> dict[str, Any]:
         return {
@@ -52,10 +53,10 @@ class ReminderService:
         }
 
     @staticmethod
-    def _schedule_key(event_type: str, scheduled_at: datetime, deadline: datetime, arrival: datetime, override: Any) -> str:
-        return "|".join((event_type, scheduled_at.isoformat(), deadline.isoformat(), arrival.isoformat(), str(override or "")))
+    def _schedule_key(event_type: str, scheduled_at: datetime, deadline: datetime, arrival: datetime | None, override: Any) -> str:
+        return "|".join((event_type, scheduled_at.isoformat(), deadline.isoformat(), arrival.isoformat() if arrival else "", str(override or "")))
 
-    def _create_or_retry(self, order: dict[str, Any], event_type: str, scheduled_at: datetime, deadline: datetime, arrival: datetime) -> tuple[int, dict[str, Any]] | None:
+    def _create_or_retry(self, order: dict[str, Any], event_type: str, scheduled_at: datetime, deadline: datetime, arrival: datetime | None) -> tuple[int, dict[str, Any]] | None:
         schedule_key = self._schedule_key(event_type, scheduled_at, deadline, arrival, order.get("deadline_override_at"))
         event_id = self.repository.insert_reminder_event({
             "order_id": order["id"],
@@ -128,42 +129,58 @@ class ReminderService:
         settings = self._settings()
         created = sent = 0
         overdue: list[str] = []
-        buckets: dict[tuple[str, str], list[tuple[int, dict[str, Any]]]] = {}
+        buckets: dict[tuple[str, str, str], list[tuple[int, dict[str, Any]]]] = {}
         for source in self.repository.list_orders({}):
             order = dict(source)
             if order.get("stage") in TERMINAL_STAGES:
                 continue
+            mode = order.get("reminder_mode") or (LONG_TERM if order.get("latest_arrival_at") else UNSCHEDULED)
+            if mode == UNSCHEDULED:
+                continue
             deadline = _parse(order.get("deadline_override_at") or order.get("deadline_at"))
             arrival = _parse(order.get("latest_arrival_at"))
-            if deadline is None or arrival is None:
+            if deadline is None:
                 continue
-            if current > deadline:
-                overdue_key = self._schedule_key("OVERDUE", deadline, deadline, arrival, order.get("deadline_override_at"))
-                event_id = self.repository.insert_reminder_event({
-                    "order_id": order["id"], "event_type": "OVERDUE", "schedule_key": overdue_key,
-                    "scheduled_at": deadline.isoformat(),
-                })
-                is_new = event_id is not None
-                if event_id is None:
-                    existing = self.repository.find_pending_reminder_event(order["id"], "OVERDUE", overdue_key)
-                    event_id = existing["id"] if existing is not None else None
-                if event_id is not None:
-                    self.repository.mark_overdue(order["id"], current.isoformat())
-                    created += int(is_new)
-                    buckets.setdefault(("OVERDUE", deadline.date().isoformat()), []).append((event_id, order))
-                overdue.append(str(order.get("order_no")))
-            for event_type, scheduled_at in build_reminder_schedule(deadline, arrival).items():
+            schedule = build_process_day_schedule(deadline) if mode in QUICK_REMINDER_MODES else build_reminder_schedule(deadline)
+            process_day_handled = False
+            process_day_scheduled_at = schedule.get("PROCESS_DAY")
+            for event_type, scheduled_at in schedule.items():
                 if scheduled_at > current:
                     continue
                 if event_type == "PROCESS_DAY" and order.get("stage") not in PROCESS_STAGES:
                     continue
-                if event_type == "PROCESS_DAY" and current > deadline:
-                    continue
                 item = self._create_or_retry(order, event_type, scheduled_at, deadline, arrival)
+                if event_type == "PROCESS_DAY":
+                    process_day_handled = item is not None
                 if item is not None:
                     created += 1
-                    buckets.setdefault((event_type, scheduled_at.date().isoformat()), []).append(item)
-        for (event_type, _schedule_date), items in buckets.items():
-            bucket_settings = {**settings, "email_enabled": False} if event_type == "OVERDUE" else settings
+                    buckets.setdefault((event_type, scheduled_at.date().isoformat(), mode), []).append(item)
+            if process_day_handled and process_day_scheduled_at is not None and current > process_day_scheduled_at:
+                self._late_process_day_reminders[order["id"]] = (deadline, current)
+                self.repository.mark_overdue(order["id"], current.isoformat())
+            late_process_day = self._late_process_day_reminders.get(order["id"])
+            if late_process_day is not None and late_process_day[0] != deadline:
+                self._late_process_day_reminders.pop(order["id"], None)
+                late_process_day = None
+            if current > deadline or (current == deadline and order.get("stage") not in PROCESS_STAGES):
+                elapsed_minutes = int((current - deadline).total_seconds() // 600)
+                overdue_scheduled_at = deadline + timedelta(minutes=elapsed_minutes * 10)
+                if not process_day_handled and not (overdue_scheduled_at == deadline and order.get("stage") in PROCESS_STAGES) and not (late_process_day is not None and overdue_scheduled_at <= late_process_day[1]):
+                    overdue_key = self._schedule_key("OVERDUE", overdue_scheduled_at, deadline, arrival, order.get("deadline_override_at"))
+                    event_id = self.repository.insert_reminder_event({
+                        "order_id": order["id"], "event_type": "OVERDUE", "schedule_key": overdue_key,
+                        "scheduled_at": overdue_scheduled_at.isoformat(),
+                    })
+                    is_new = event_id is not None
+                    if event_id is None:
+                        existing = self.repository.find_pending_reminder_event(order["id"], "OVERDUE", overdue_key)
+                        event_id = existing["id"] if existing is not None else None
+                    if event_id is not None:
+                        self.repository.mark_overdue(order["id"], current.isoformat())
+                        created += int(is_new)
+                        buckets.setdefault(("OVERDUE", overdue_scheduled_at.date().isoformat(), mode), []).append((event_id, order))
+                overdue.append(str(order.get("order_no")))
+        for (event_type, _schedule_date, mode), items in buckets.items():
+            bucket_settings = {**settings, "email_enabled": False} if event_type == "OVERDUE" or mode in QUICK_REMINDER_MODES else settings
             sent += self._deliver_bucket(event_type, items, bucket_settings)
         return {"created": created, "sent": sent, "overdue": sorted(set(overdue))}

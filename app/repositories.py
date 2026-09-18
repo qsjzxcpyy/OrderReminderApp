@@ -13,8 +13,8 @@ ERP_COLUMNS = {
 }
 HUMAN_COLUMNS = {
     "latest_arrival_at", "deadline_at", "deadline_override_at", "deadline_rule",
-    "deadline_issue", "stage", "stage_suggestion", "actual_tracking_number",
-    "return_confirmed_at", "processing_result", "processing_note", "completed_at",
+    "deadline_issue", "reminder_mode", "stage", "custom_stage", "stage_suggestion", "actual_tracking_number",
+    "return_confirmed_at", "processing_result", "processing_note", "completed_at", "overdue_at",
 }
 
 
@@ -147,6 +147,13 @@ class Repository:
             self.connection.execute(
                 "UPDATE orders SET overdue_at = ?, updated_at = ? WHERE id = ?",
                 (overdue_at, now_iso(), order_id),
+            )
+
+    def cancel_pending_reminder_events(self, order_id):
+        with self.connection:
+            self.connection.execute(
+                "UPDATE reminder_events SET status = 'CANCELLED', updated_at = ? WHERE order_id = ? AND status IN ('PENDING', 'CLAIMED')",
+                (now_iso(), order_id),
             )
 
     def append_activity(self, order_no, action, details=None, actor=None):

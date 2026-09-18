@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Literal
 
 
-Rule = Literal["ARRIVAL_MINUS_4", "SHIP_PLUS_2", "SHIP_PLUS_3", "NONE"]
+Rule = Literal["ARRIVAL_MINUS_4", "SHIP_PLUS_2", "SHIP_PLUS_3", "QUICK_TODAY", "QUICK_TOMORROW", "NONE"]
 Issue = Literal["NONE", "MISSING_ARRIVAL", "DATE_CONFLICT"]
 
 
@@ -12,4 +12,3 @@ class DeadlineResult:
     deadline_at: datetime | None
     rule: Rule
     issue: Issue
-

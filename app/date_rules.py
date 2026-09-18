@@ -57,22 +57,31 @@ def calculate_deadline(
     return DeadlineResult(deadline_at=compensated, rule=rule, issue="NONE")
 
 
-def _at_ten_am(calendar_date) -> datetime:
-    return datetime.combine(calendar_date, time(10, 0), tzinfo=LOCAL_TZ)
+def _at_local_time(calendar_date, source: datetime) -> datetime:
+    return datetime.combine(calendar_date, source.timetz().replace(tzinfo=None), tzinfo=LOCAL_TZ)
+
+
+def build_process_day_schedule(deadline_at: datetime) -> Mapping[str, datetime]:
+    """Build the single processing reminder for a quick order."""
+    _require_aware(deadline_at, "deadline_at")
+    deadline = _local(deadline_at)
+    return {"PROCESS_DAY": _at_local_time(deadline.date(), deadline)}
 
 
 def build_reminder_schedule(
     deadline_at: datetime,
-    arrival_at: datetime,
+    arrival_at: datetime | None = None,
 ) -> Mapping[str, datetime]:
-    """Build the three local 10:00 reminders for a valid deadline."""
+    """Build a deadline reminder, with legacy arrival reminders when supplied."""
     _require_aware(deadline_at, "deadline_at")
-    _require_aware(arrival_at, "arrival_at")
     deadline = _local(deadline_at)
+    if arrival_at is None:
+        return {"PROCESS_DAY": _at_local_time(deadline.date(), deadline)}
+    _require_aware(arrival_at, "arrival_at")
     arrival = _local(arrival_at)
 
     return {
-        "PROCESS_DAY": _at_ten_am(deadline.date()),
-        "ARRIVAL_EVE": _at_ten_am(arrival.date() - timedelta(days=1)),
-        "ARRIVAL_DAY": _at_ten_am(arrival.date()),
+        "PROCESS_DAY": _at_local_time(deadline.date(), deadline),
+        "ARRIVAL_EVE": _at_local_time(arrival.date() - timedelta(days=1), deadline),
+        "ARRIVAL_DAY": _at_local_time(arrival.date(), deadline),
     }

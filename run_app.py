@@ -15,7 +15,7 @@ def main():
     app_dir = Path(__file__).resolve().parent
     if str(app_dir) not in sys.path:
         sys.path.insert(0, str(app_dir))
-    application = create_app(start_scheduler=True, shutdown_when_idle=True)
+    application = create_app(start_scheduler=True, shutdown_when_idle=False)
     uvicorn.run(application, host=APP_HOST, port=APP_PORT)
 
 

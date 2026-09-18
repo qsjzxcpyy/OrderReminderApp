@@ -30,6 +30,9 @@ class OrderPatch(RequestModel):
     latest_arrival_at: str | None = None
     deadline_override_at: str | None = None
     stage: str | None = None
+    custom_stage: str | None = None
+    reminder_mode: str | None = None
+    process_date: str | None = None
     processing_result: str | None = None
     processing_note: str | None = None
 
@@ -274,14 +277,14 @@ def create_app(db_path=None, start_scheduler=False, shutdown_when_idle=False):
 
     @app.get("/", include_in_schema=False)
     def index():
-        return FileResponse(WEB_DIR / "index.html")
+        return FileResponse(WEB_DIR / "index.html", headers={"Cache-Control": "no-store, max-age=0"})
 
     @app.get("/app.js", include_in_schema=False)
     def javascript():
-        return FileResponse(WEB_DIR / "app.js", media_type="text/javascript")
+        return FileResponse(WEB_DIR / "app.js", media_type="text/javascript", headers={"Cache-Control": "no-store, max-age=0"})
 
     @app.get("/styles.css", include_in_schema=False)
     def stylesheet():
-        return FileResponse(WEB_DIR / "styles.css", media_type="text/css")
+        return FileResponse(WEB_DIR / "styles.css", media_type="text/css", headers={"Cache-Control": "no-store, max-age=0"})
 
     return app

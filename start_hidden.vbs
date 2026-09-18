@@ -7,7 +7,7 @@ appDir = fileSystem.GetParentFolderName(WScript.ScriptFullName)
 pythonExe = appDir & "\.venv\Scripts\python.exe"
 If Not fileSystem.FileExists(pythonExe) Then pythonExe = fileSystem.GetParentFolderName(appDir) & "\.venv\Scripts\python.exe"
 If Not fileSystem.FileExists(pythonExe) Then pythonExe = "python.exe"
-command = """" & pythonExe & """ """ & appDir & "\run_app.py"""
+command = Chr(34) & pythonExe & Chr(34) & " " & Chr(34) & appDir & "\run_app.py" & Chr(34)
 For index = 0 To WScript.Arguments.Count - 1
     command = command & " " & WScript.Arguments(index)
 Next

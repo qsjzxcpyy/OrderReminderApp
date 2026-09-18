@@ -58,6 +58,11 @@ class FakeRepository:
     def set_reminder_event_status(self, event_id, status):
         next(item for item in self.events.values() if item["id"] == event_id)["status"] = status
 
+    def cancel_pending_reminder_events(self, order_id):
+        for event in self.events.values():
+            if event["order_id"] == order_id and event["status"] in {"PENDING", "CLAIMED"}:
+                event["status"] = "CANCELLED"
+
     def mark_overdue(self, order_id, at):
         next(item for item in self.orders if item["id"] == order_id)["overdue_at"] = at
 
@@ -95,7 +100,7 @@ class FakeMailer:
         return self.results.pop(0) if self.results else {"status": "SENT"}
 
 
-def order(order_id, *, stage="VIRTUAL_PENDING", deadline="2026-09-07T14:59:00+08:00", arrival="2026-09-11T14:59:00+08:00"):
+def order(order_id, *, stage="VIRTUAL_PENDING", deadline="2026-09-07T14:59:00+08:00", arrival="2026-09-11T14:59:00+08:00", reminder_mode="LONG_TERM"):
     return {
         "id": order_id,
         "order_no": f"ORDER-{order_id}",
@@ -103,6 +108,7 @@ def order(order_id, *, stage="VIRTUAL_PENDING", deadline="2026-09-07T14:59:00+08
         "deadline_at": deadline,
         "deadline_override_at": None,
         "latest_arrival_at": arrival,
+        "reminder_mode": reminder_mode,
     }
 
 
@@ -118,29 +124,21 @@ def service_for(orders, settings=None, windows=None, email=None):
 
 
 def test_all_schedule_groups_are_created_at_due_times():
-    orders = [order(1)]
-    cases = [
-        ("PROCESS_DAY", datetime(2026, 9, 7, 10, 0, tzinfo=LOCAL_TZ)),
-        ("ARRIVAL_EVE", datetime(2026, 9, 10, 10, 0, tzinfo=LOCAL_TZ)),
-        ("ARRIVAL_DAY", datetime(2026, 9, 11, 10, 0, tzinfo=LOCAL_TZ)),
-    ]
-    for event_type, now in cases:
-        service = service_for(orders)
-        result = service.check(now)
-        assert result["created"] >= 1
-        assert event_type in {event["event_type"] for event in service.repository.events.values()}
+    service = service_for([order(1)])
+    result = service.check(datetime(2026, 9, 7, 14, 59, tzinfo=LOCAL_TZ))
+
+    assert result["created"] == 1
+    assert {event["event_type"] for event in service.repository.events.values()} == {"PROCESS_DAY"}
 
 
-def test_process_day_filters_stages_and_arrival_events_exclude_only_completed():
-    now = datetime(2026, 9, 7, 10, 0, tzinfo=LOCAL_TZ)
+def test_process_day_filters_stages_and_completed_orders():
+    now = datetime(2026, 9, 7, 14, 59, tzinfo=LOCAL_TZ)
     service = service_for([order(1), order(2, stage="SHIPPED_PENDING_RETURN"), order(3, stage="COMPLETED")])
-    assert service.check(now)["created"] == 1
+    assert service.check(now)["created"] == 2
 
-    now = datetime(2026, 9, 10, 10, 0, tzinfo=LOCAL_TZ)
     service = service_for([order(1), order(2, stage="SHIPPED_PENDING_RETURN"), order(3, stage="COMPLETED")])
     service.check(now)
-    arrival_events = [event for event in service.repository.events.values() if event["event_type"] == "ARRIVAL_EVE"]
-    assert len(arrival_events) == 2
+    assert {event["event_type"] for event in service.repository.events.values()} == {"PROCESS_DAY", "OVERDUE"}
 
 
 def test_refunded_orders_do_not_create_reminders():
@@ -152,31 +150,112 @@ def test_refunded_orders_do_not_create_reminders():
 def test_manual_import_pending_return_stage_creates_process_day_reminder():
     service = service_for([order(1, stage=MANUAL_IMPORT_PENDING_RETURN)])
 
-    result = service.check(datetime(2026, 9, 7, 10, 0, tzinfo=LOCAL_TZ))
+    result = service.check(datetime(2026, 9, 7, 14, 59, tzinfo=LOCAL_TZ))
 
     assert result["created"] == 1
     assert {event["event_type"] for event in service.repository.events.values()} == {"PROCESS_DAY"}
 
 
+def test_custom_stage_creates_process_day_reminder():
+    service = service_for([order(1, stage="CUSTOM_STAGE")])
+
+    result = service.check(datetime(2026, 9, 7, 14, 59, tzinfo=LOCAL_TZ))
+
+    assert result["created"] == 1
+    assert {event["event_type"] for event in service.repository.events.values()} == {"PROCESS_DAY"}
+
+
+def test_quick_processing_order_creates_web_reminder_without_email():
+    mailer = FakeMailer()
+    service = service_for([
+        order(1, deadline="2026-09-02T23:59:00+08:00", arrival=None, reminder_mode="TODAY"),
+    ], email=mailer)
+
+    result = service.check(datetime(2026, 9, 2, 23, 59, tzinfo=LOCAL_TZ))
+
+    assert result["created"] == 1
+    assert len(mailer.calls) == 0
+    assert {event["event_type"] for event in service.repository.events.values()} == {"PROCESS_DAY"}
+
+
+def test_long_term_email_uses_processing_deadline_time():
+    mailer = FakeMailer()
+    service = service_for([order(1)], email=mailer)
+
+    service.check(datetime(2026, 9, 7, 14, 59, tzinfo=LOCAL_TZ))
+
+    assert len(mailer.calls) == 1
+    assert mailer.calls[0][0] == "PROCESS_DAY"
+    event = next(iter(service.repository.events.values()))
+    assert event["scheduled_at"] == "2026-09-07T14:59:00+08:00"
+
+
+def test_long_term_reminder_does_not_require_arrival_date():
+    mailer = FakeMailer()
+    service = service_for([
+        order(1, arrival=None, deadline="2026-09-07T14:59:00+08:00"),
+    ], email=mailer)
+
+    result = service.check(datetime(2026, 9, 7, 14, 59, tzinfo=LOCAL_TZ))
+
+    assert result["created"] == 1
+    assert len(mailer.calls) == 1
+    assert {event["event_type"] for event in service.repository.events.values()} == {"PROCESS_DAY"}
+
+
 def test_event_identity_changes_with_schedule_inputs_and_prevents_duplicates():
-    now = datetime(2026, 9, 7, 10, 0, tzinfo=LOCAL_TZ)
+    now = datetime(2026, 9, 7, 14, 59, tzinfo=LOCAL_TZ)
     service = service_for([order(1)])
     assert service.check(now)["created"] == 1
     assert service.check(now)["created"] == 0
     service.repository.orders[0]["deadline_override_at"] = "2026-09-08T14:59:00+08:00"
     service.repository.orders[0]["deadline_at"] = "2026-09-08T14:59:00+08:00"
-    assert service.check(datetime(2026, 9, 8, 10, 0, tzinfo=LOCAL_TZ))["created"] == 1
+    assert service.check(datetime(2026, 9, 8, 14, 59, tzinfo=LOCAL_TZ))["created"] == 1
 
 
 def test_catch_up_and_overdue_events_are_dispatched_once():
     windows = FakeWindows()
     service = service_for([order(1)], windows=windows)
-    assert service.check(datetime(2026, 9, 7, 11, 0, tzinfo=LOCAL_TZ))["sent"] == 1
+    assert service.check(datetime(2026, 9, 7, 15, 0, tzinfo=LOCAL_TZ))["sent"] == 1
 
     overdue = service_for([order(2, deadline="2026-09-07T10:30:00+08:00")])
     result = overdue.check(datetime(2026, 9, 7, 11, 0, tzinfo=LOCAL_TZ))
     assert result["overdue"] == ["ORDER-2"]
     assert overdue.check(datetime(2026, 9, 7, 11, 1, tzinfo=LOCAL_TZ))["created"] == 0
+
+
+def test_overdue_reminder_starts_at_deadline_and_repeats_every_ten_minutes():
+    windows = FakeWindows()
+    settings = {"windows_notifications_enabled": True, "email_enabled": False}
+    service = service_for([order(1, stage="SHIPPED_PENDING_RETURN", deadline="2026-09-07T10:30:00+08:00")], settings=settings, windows=windows)
+
+    at_deadline = service.check(datetime(2026, 9, 7, 10, 30, tzinfo=LOCAL_TZ))
+    nine_minutes_later = service.check(datetime(2026, 9, 7, 10, 39, tzinfo=LOCAL_TZ))
+    ten_minutes_later = service.check(datetime(2026, 9, 7, 10, 40, tzinfo=LOCAL_TZ))
+
+    assert at_deadline["sent"] == 1
+    assert nine_minutes_later["sent"] == 0
+    assert ten_minutes_later["sent"] == 1
+    overdue_events = [event for event in service.repository.events.values() if event["event_type"] == "OVERDUE"]
+    assert [event["scheduled_at"] for event in overdue_events] == [
+        "2026-09-07T10:30:00+08:00",
+        "2026-09-07T10:40:00+08:00",
+    ]
+
+
+def test_process_day_reminder_is_the_first_overdue_reminder_without_duplicate():
+    windows = FakeWindows()
+    settings = {"windows_notifications_enabled": True, "email_enabled": False}
+    service = service_for([order(1, deadline="2026-09-07T10:30:00+08:00")], settings=settings, windows=windows)
+
+    at_deadline = service.check(datetime(2026, 9, 7, 10, 30, tzinfo=LOCAL_TZ))
+    one_minute_later = service.check(datetime(2026, 9, 7, 10, 31, tzinfo=LOCAL_TZ))
+    ten_minutes_later = service.check(datetime(2026, 9, 7, 10, 40, tzinfo=LOCAL_TZ))
+
+    assert at_deadline["sent"] == 1
+    assert one_minute_later["sent"] == 0
+    assert ten_minutes_later["sent"] == 1
+    assert [event["event_type"] for event in service.repository.events.values()] == ["PROCESS_DAY", "OVERDUE"]
 
 
 def test_failed_overdue_windows_notification_is_retried():
@@ -195,12 +274,12 @@ def test_failed_overdue_windows_notification_is_retried():
 def test_channel_results_are_independent_and_disabled_channels_are_skipped():
     failing_email = FakeMailer([{"status": "FAILED", "message": "smtp down"}])
     service = service_for([order(1)], email=failing_email)
-    service.check(datetime(2026, 9, 7, 10, 0, tzinfo=LOCAL_TZ))
+    service.check(datetime(2026, 9, 7, 14, 59, tzinfo=LOCAL_TZ))
     assert service.repository.results[(1, "windows")]["status"] == "SENT"
     assert service.repository.results[(1, "email")]["status"] == "FAILED"
 
     service = service_for([order(1)], {"windows_notifications_enabled": False, "email_enabled": False})
-    service.check(datetime(2026, 9, 7, 10, 0, tzinfo=LOCAL_TZ))
+    service.check(datetime(2026, 9, 7, 14, 59, tzinfo=LOCAL_TZ))
     assert service.repository.results[(1, "windows")]["status"] == "SKIPPED"
     assert service.repository.results[(1, "email")]["status"] == "SKIPPED"
 
@@ -208,7 +287,7 @@ def test_channel_results_are_independent_and_disabled_channels_are_skipped():
 def test_due_orders_share_one_email_digest_per_event_date_bucket():
     mailer = FakeMailer()
     service = service_for([order(1), order(2)], email=mailer)
-    service.check(datetime(2026, 9, 7, 10, 0, tzinfo=LOCAL_TZ))
+    service.check(datetime(2026, 9, 7, 14, 59, tzinfo=LOCAL_TZ))
     assert len(mailer.calls) == 1
     assert [item["order_no"] for item in mailer.calls[0][1]] == ["ORDER-1", "ORDER-2"]
     assert service.repository.results[(1, "email")]["status"] == "SENT"
@@ -219,7 +298,7 @@ def test_failed_grouped_email_retries_only_the_failed_channel():
     windows = FakeWindows()
     mailer = FakeMailer([{"status": "FAILED", "message": "down"}, {"status": "SENT"}])
     service = service_for([order(1), order(2)], windows=windows, email=mailer)
-    now = datetime(2026, 9, 7, 10, 0, tzinfo=LOCAL_TZ)
+    now = datetime(2026, 9, 7, 14, 59, tzinfo=LOCAL_TZ)
     service.check(now)
     service.check(now)
     assert len(mailer.calls) == 2
@@ -233,7 +312,7 @@ def test_overdue_timestamp_is_persisted_on_the_order(tmp_path):
     repository = Repository(connect_database(database))
     repository.upsert_erp_snapshot("ORDER-1", {"order_status": "pending"}, "2026-09-01T10:00:00+08:00")
     repository.update_human_fields("ORDER-1", {
-        "stage": "VIRTUAL_PENDING", "latest_arrival_at": "2026-09-11T14:59:00+08:00",
+            "stage": "VIRTUAL_PENDING", "reminder_mode": "LONG_TERM", "latest_arrival_at": "2026-09-11T14:59:00+08:00",
         "deadline_at": "2026-09-07T10:30:00+08:00",
     })
     from app.reminders import ReminderService
