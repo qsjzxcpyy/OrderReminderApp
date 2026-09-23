@@ -95,6 +95,11 @@ def test_dashboard_has_collapsible_completed_orders_and_deadline_sort(tmp_path):
     assert "if (!aDeadline && bDeadline) return -1" in app_script
     assert "if (aDeadline && !bDeadline) return 1" in app_script
     assert "String(bDeadline).localeCompare(String(aDeadline))" in app_script
+    assert 'id="copy-selected"' in index
+    assert 'function copyOrderNos(orderNos)' in app_script
+    assert 'values.join(" ")' in app_script
+    assert 'document.createElement("textarea")' in app_script
+    assert "resizeStageInput(input)" in app_script
 
 
 def test_dashboard_includes_bulk_complete_action(tmp_path):
