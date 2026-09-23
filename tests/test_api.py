@@ -100,6 +100,10 @@ def test_dashboard_has_collapsible_completed_orders_and_deadline_sort(tmp_path):
     assert 'values.join(" ")' in app_script
     assert 'document.createElement("textarea")' in app_script
     assert "resizeStageInput(input)" in app_script
+    assert 'addEventListener("focusout"' in app_script
+    assert 'saveInlineCustomStage(input)' in app_script
+    assert 'addEventListener("keydown"' in app_script
+    assert 'input.blur()' in app_script
 
 
 def test_dashboard_includes_bulk_complete_action(tmp_path):
@@ -163,8 +167,8 @@ def test_dashboard_assets_and_api_requests_disable_stale_cache(tmp_path):
     assert index_response.headers["cache-control"] == "no-store, max-age=0"
     assert app_response.headers["cache-control"] == "no-store, max-age=0"
     assert styles_response.headers["cache-control"] == "no-store, max-age=0"
-    assert "/app.js?v=20260909-3" in index_response.text
-    assert "/styles.css?v=20260909-3" in index_response.text
+    assert "/app.js?v=20260923-1" in index_response.text
+    assert "/styles.css?v=20260923-1" in index_response.text
     assert 'cache: "no-store"' in app_response.text
 
 
@@ -287,8 +291,8 @@ def test_dashboard_uses_processing_deadline_for_today_count_and_hides_arrival_fi
     assert 'id="summary-today"' in index
     assert 'id="summary-overdue"' in index
     assert "summary-filter" in app_script
-    assert 'href="/styles.css?v=20260909-3"' in index
-    assert 'src="/app.js?v=20260909-3"' in index
+    assert 'href="/styles.css?v=20260923-1"' in index
+    assert 'src="/app.js?v=20260923-1"' in index
     assert ".drawer-body > .detail-section:has(#tracking-input)" in styles
     assert ".drawer-body > .detail-section:has(#exception-result)" in styles
     assert ".drawer-body > .detail-section:has(#detail-platform)" in styles
